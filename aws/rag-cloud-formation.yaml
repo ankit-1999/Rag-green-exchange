@@ -1,0 +1,525 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'GreenGrid Exchange RAG AI - Document Ingestion Infrastructure (7-day POC, Free Tier Optimized)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: poc
+    Description: Environment name
+  
+  POCExpirationDate:
+    Type: String
+    Default: '2026-07-06'
+    Description: Date when resources should be cleaned up (YYYY-MM-DD)
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "POC Configuration"
+        Parameters:
+          - Environment
+          - POCExpirationDate
+    ParameterLabels:
+      Environment:
+        default: "Environment Name"
+      POCExpirationDate:
+        default: "POC Expiration Date"
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # VPC and Networking
+  # ---------------------------------------------------------------------------
+  
+  GreenGridVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-vpc-${Environment}'
+        - Key: Project
+          Value: GreenGrid
+        - Key: ExpiresOn
+          Value: !Ref POCExpirationDate
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GreenGridVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-public-subnet-${Environment}'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-igw-${Environment}'
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref GreenGridVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GreenGridVPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-rt-${Environment}'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group for EC2
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for GreenGrid RAG AI EC2 instance
+      VpcId: !Ref GreenGridVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+          Description: FastAPI application
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-ec2-sg-${Environment}'
+
+  # Security Group for OpenSearch
+  OpenSearchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for OpenSearch domain
+      VpcId: !Ref GreenGridVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+          Description: HTTPS from EC2
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-os-sg-${Environment}'
+
+  # ---------------------------------------------------------------------------
+  # IAM Role and Policies
+  # ---------------------------------------------------------------------------
+
+  GreenGridEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'greengrid-ec2-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-ec2-role-${Environment}'
+
+  GreenGridEC2RoleInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref GreenGridEC2Role
+
+  # S3 permissions
+  S3BucketPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: greengrid-s3-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt DocumentBucket.Arn
+              - !Sub '${DocumentBucket.Arn}/*'
+      Roles:
+        - !Ref GreenGridEC2Role
+
+  # Bedrock permissions
+  BedrockPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: greengrid-bedrock-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
+      Roles:
+        - !Ref GreenGridEC2Role
+
+  # OpenSearch permissions
+  OpenSearchPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: greengrid-opensearch-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - es:ESHttpGet
+              - es:ESHttpHead
+              - es:ESHttpPost
+              - es:ESHttpPut
+              - es:ESHttpDelete
+            Resource:
+              - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/greengrid-docs-${Environment}/*'
+      Roles:
+        - !Ref GreenGridEC2Role
+
+  # CloudWatch logs and metrics
+  CloudWatchLogsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: greengrid-cloudwatch-logs-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+            Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/greengrid/*'
+      Roles:
+        - !Ref GreenGridEC2Role
+
+  # ---------------------------------------------------------------------------
+  # S3 Bucket for Documents
+  # ---------------------------------------------------------------------------
+
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'greengrid-documents-${AWS::AccountId}-${Environment}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-documents-${Environment}'
+        - Key: ExpiresOn
+          Value: !Ref POCExpirationDate
+
+  # ---------------------------------------------------------------------------
+  # OpenSearch Domain
+  # ---------------------------------------------------------------------------
+
+  OpenSearchDomain:
+    Type: AWS::OpenSearchServiceDomains::Domain
+    DependsOn: OpenSearchServiceLinkedRole
+    Properties:
+      DomainName: !Sub 'greengrid-docs-${Environment}'
+      EngineVersion: OpenSearch_2.13
+      NodeToNodeEncryptionOptions:
+        Enabled: true
+      EncryptionAtRestOptions:
+        Enabled: true
+        KmsKeyId: alias/aws/opensearch
+      DomainEndpointOptions:
+        EnforceHttps: true
+        TlsSecurityPolicy: 'Policy-Min-TLS-1-2-2019-07'
+      NodeType: t3.small.search
+      DomainEndpointType: VPC
+      VPCOptions:
+        SubnetIds:
+          - !Ref PublicSubnet
+        SecurityGroupIds:
+          - !Ref OpenSearchSecurityGroup
+      InstanceCount: 1
+      EBSOptions:
+        EBSEnabled: true
+        VolumeType: gp3
+        VolumeSize: 10
+      AdvancedSecurityOptions:
+        Enabled: true
+        InternalUserDatabaseEnabled: true
+        MasterUserOptions:
+          MasterUserName: admin
+          MasterUserPassword: !Sub 'GreenGrid${AWS::AccountId}!'  # Change in production
+      LogPublishingOptions:
+        ES_APPLICATION_LOGS:
+          CloudWatchLogsLogGroupArn: !GetAtt OpenSearchLogGroup.Arn
+          Enabled: true
+        INDEX_SLOW_LOGS:
+          CloudWatchLogsLogGroupArn: !GetAtt OpenSearchIndexSlowLogsGroup.Arn
+          Enabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-opensearch-${Environment}'
+        - Key: ExpiresOn
+          Value: !Ref POCExpirationDate
+
+  # Service-linked role for OpenSearch (required)
+  OpenSearchServiceLinkedRole:
+    Type: AWS::IAM::ServiceLinkedRole
+    Properties:
+      AWSServiceName: opensearchservice.amazonaws.com
+      Description: Service-linked role for OpenSearch
+
+  OpenSearchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/opensearch/greengrid/${Environment}/application-logs'
+      RetentionInDays: 3
+
+  OpenSearchIndexSlowLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/opensearch/greengrid/${Environment}/index-slow-logs'
+      RetentionInDays: 3
+
+  OpenSearchLogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub 'greengrid-opensearch-logs-${Environment}'
+      PolicyText: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "es.amazonaws.com"
+              },
+              "Action": "logs:PutLogEvents",
+              "Resource": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/opensearch/*"
+            }
+          ]
+        }
+
+  # ---------------------------------------------------------------------------
+  # EC2 Instance
+  # ---------------------------------------------------------------------------
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: OpenSearchDomain  # Wait for OpenSearch to be ready
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: t3.micro
+      IamInstanceProfile: !Ref GreenGridEC2RoleInstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      TagSpecifications:
+        - ResourceType: instance
+          Tags:
+            - Key: Name
+              Value: !Sub 'greengrid-app-${Environment}'
+            - Key: ExpiresOn
+              Value: !Ref POCExpirationDate
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          
+          # Update system
+          yum update -y
+          yum install -y git python3 python3-pip
+          
+          # Create app directory
+          mkdir -p /opt/greengrid
+          cd /opt/greengrid
+          
+          # Clone repository (replace with your repo)
+          git clone https://github.com/your-org/greenexchange.git . || echo "Git clone skipped - set your repo URL"
+          
+          # Create virtual environment
+          python3 -m venv venv
+          source venv/bin/activate
+          
+          # Install dependencies (if app exists)
+          if [ -f Rag-green-exchange/requirements.txt ]; then
+            pip install -r Rag-green-exchange/requirements.txt
+          fi
+          
+          # Create .env file
+          cat > Rag-green-exchange/.env << 'EOF'
+          AWS_REGION=${AWS::Region}
+          OPENSEARCH_ENDPOINT=https://${OpenSearchDomain.DomainEndpoint}
+          OPENSEARCH_INDEX_NAME=greengrid-docs
+          OPENSEARCH_USE_AWS_AUTH=true
+          S3_BUCKET_NAME=${DocumentBucket}
+          BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
+          BEDROCK_LLM_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+          APP_NAME=GreenGrid Exchange RAG AI
+          DEBUG=false
+          EOF
+          
+          # Create systemd service
+          cat > /etc/systemd/system/greengrid-api.service << 'EOF'
+          [Unit]
+          Description=GreenGrid Exchange RAG AI
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=ec2-user
+          WorkingDirectory=/opt/greengrid/Rag-green-exchange
+          ExecStart=/opt/greengrid/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+          Restart=on-failure
+          RestartSec=10
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          # Enable and start service
+          systemctl daemon-reload
+          systemctl enable greengrid-api.service
+          systemctl start greengrid-api.service || echo "Service start will retry"
+          
+          echo "EC2 setup complete"
+
+  # ---------------------------------------------------------------------------
+  # CloudWatch Alarms for Budget Monitoring
+  # ---------------------------------------------------------------------------
+
+  BudgetAlarm15:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'greengrid-budget-alert-15-${Environment}'
+      AlarmDescription: Alert when estimated charges reach $15
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 15
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+
+  BudgetAlarm30:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'greengrid-budget-alert-30-${Environment}'
+      AlarmDescription: Alert when estimated charges reach $30
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 30
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+
+  BudgetAlarm50:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'greengrid-budget-alert-50-${Environment}'
+      AlarmDescription: CRITICAL: Alert when estimated charges reach $50
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+
+Outputs:
+  EC2PublicIP:
+    Description: Public IP of the EC2 instance
+    Value: !GetAtt EC2Instance.PublicIp
+    Export:
+      Name: !Sub '${Environment}-EC2-PublicIP'
+
+  ApiEndpoint:
+    Description: FastAPI application endpoint
+    Value: !Sub 'http://${EC2Instance.PublicDnsName}:8000'
+    Export:
+      Name: !Sub '${environment}-API-Endpoint'
+
+  ApiDocsEndpoint:
+    Description: Swagger UI endpoint
+    Value: !Sub 'http://${EC2Instance.PublicDnsName}:8000/docs'
+    Export:
+      Name: !Sub '${environment}-API-Docs'
+
+  OpenSearchEndpoint:
+    Description: OpenSearch domain endpoint
+    Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+    Export:
+      Name: !Sub '${environment}-OpenSearch-Endpoint'
+
+  DocumentBucketName:
+    Description: S3 bucket for documents
+    Value: !Ref DocumentBucket
+    Export:
+      Name: !Sub '${environment}-Document-Bucket'
+
+  SSHCommand:
+    Description: SSH command to connect to EC2 instance
+    Value: !Sub 'ssh -i your-key.pem ec2-user@${EC2Instance.PublicDnsName}'
+
+  CleanupDate:
+    Description: Date when resources should be deleted
+    Value: !Ref POCExpirationDate

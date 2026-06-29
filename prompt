@@ -1,0 +1,388 @@
+Create a production-ready FastAPI RAG/AI module for an MVP called GreenGrid Exchange.
+
+Project context:
+GreenGrid Exchange is an electricity credit tracking and marketplace system. Each electricity credit represents 1 kWh of verified electricity. Users can register/login using User ID and MetaMask wallet ID, create electricity credits from meter readings, buy credits from marketplace, retire credits, and view audit history. Credits have source metadata such as Solar, Wind, Hydro, Coal, Gas, Thermal. Solar/Wind/Hydro are Renewable. Coal/Gas/Thermal are Fossil or traceability credits and must not be called green credits. Retired credits cannot be bought, sold, transferred, or reused.
+
+The RAG/AI module should power an AI assistant that answers questions about:
+- credit validity
+- credit source classification
+- whether a credit is renewable or fossil
+- whether a credit is retired or available
+- marketplace statistics
+- audit history of a credit by ID
+- user-owned credits
+- document summaries
+- electricity credit rules
+- retirement rules
+- general questions about the MVP
+
+Tech stack:
+- FastAPI
+- Pydantic
+- Amazon Bedrock placeholder service
+- OpenSearch/Elasticsearch placeholder retrieval service
+- S3 document storage placeholder
+- In-memory repository for MVP data
+- Modular service-based architecture
+
+Create the following folder/file structure:
+
+app/
+  main.py
+  config.py
+
+  schemas/
+    ai_schema.py
+    document_schema.py
+    credit_schema.py
+
+  routes/
+    ai_routes.py
+    document_routes.py
+
+  services/
+    rag_service.py
+    bedrock_service.py
+    document_service.py
+    registry_context_service.py
+    prompt_service.py
+    ai_guardrail_service.py
+
+  repositories/
+    mock_credit_repository.py
+    mock_document_repository.py
+    mock_audit_repository.py
+
+Also create:
+requirements.txt
+README.md
+
+Important:
+Do not use real AWS credentials.
+Do not call real Bedrock, OpenSearch, or S3 APIs yet.
+Implement clean placeholder methods so real integrations can be added later.
+The code should run locally without AWS access.
+
+Core RAG/AI behavior:
+The AI/RAG service should combine:
+1. Static document context from mock RAG retrieval.
+2. Dynamic registry context from in-memory credit, marketplace, user, and audit data.
+
+The AI should not approve blockchain transactions.
+The AI should not mint, buy, or retire credits.
+The AI should only explain, summarize, retrieve, and guide.
+All final validation should remain rule-based in backend services and smart contracts.
+
+Required API endpoints:
+
+1. Health check
+GET /health
+Response:
+{
+  "status": "ok",
+  "service": "greengrid-rag-ai"
+}
+
+2. Ask AI
+POST /ai/ask
+
+Request:
+{
+  "wallet_address": "0x8aF2c9dA91F0e4b78C91F",
+  "question": "Is EC-101 valid, renewable, and available to buy?"
+}
+
+Processing flow:
+- Validate input.
+- Detect if question contains a Credit ID like EC-101.
+- Retrieve relevant mock document chunks using rag_service.
+- Fetch dynamic registry context using registry_context_service.
+- Build prompt using prompt_service.
+- Generate answer using bedrock_service placeholder.
+- Run answer through ai_guardrail_service.
+- Return answer, sources, detected_entities, registry_context.
+
+Response:
+{
+  "answer": "...",
+  "sources": [
+    "source_classification_rules.pdf",
+    "retirement_policy.pdf",
+    "registry_context:EC-101"
+  ],
+  "detected_entities": {
+    "credit_id": "EC-101"
+  },
+  "registry_context": {
+    "credit_id": "EC-101",
+    "source": "Solar",
+    "category": "Renewable",
+    "quantity_kwh": 100,
+    "available_kwh": 100,
+    "retired_qty": 0,
+    "status": "Available"
+  }
+}
+
+3. Explain credit
+GET /ai/credits/{credit_id}/explain
+
+Example:
+GET /ai/credits/EC-101/explain
+
+Response:
+{
+  "credit_id": "EC-101",
+  "explanation": "EC-101 represents 100 kWh of solar-generated electricity. It is categorized as Renewable and is currently available. It has not been retired."
+}
+
+4. Audit summary
+GET /ai/credits/{credit_id}/audit-summary
+
+Response:
+{
+  "credit_id": "EC-101",
+  "summary": "EC-101 was created, verified, and listed in the marketplace. It has not been retired.",
+  "events": [
+    "EC-101 created: 100 kWh from Solar",
+    "EC-101 verified",
+    "EC-101 listed"
+  ]
+}
+
+5. Source classification
+POST /ai/source-classification
+
+Request:
+{
+  "source": "Gas"
+}
+
+Response:
+{
+  "source": "Gas",
+  "category": "Fossil",
+  "can_be_marked_green": false,
+  "explanation": "Gas-generated electricity should not be classified as renewable or green. It can be used for source traceability and electricity accounting."
+}
+
+6. Document summary
+POST /ai/document-summary
+
+Request:
+{
+  "document_id": "doc_001"
+}
+
+Response:
+{
+  "document_id": "doc_001",
+  "summary": "This document appears to describe electricity credit creation and retirement rules.",
+  "key_points": [
+    "1 electricity credit equals 1 kWh",
+    "Retired credits cannot be resold",
+    "Solar, wind, and hydro are renewable sources"
+  ],
+  "missing_fields": [],
+  "eligibility_observation": "Document is sufficient for MVP explanation."
+}
+
+7. Upload document metadata
+POST /documents/upload
+
+Request:
+{
+  "document_name": "source_classification_rules.pdf",
+  "document_type": "POLICY",
+  "s3_uri": "s3://mock-bucket/source_classification_rules.pdf"
+}
+
+Response:
+{
+  "document_id": "doc_123",
+  "document_name": "source_classification_rules.pdf",
+  "status": "indexed_mock",
+  "message": "Document metadata saved and mock indexed for RAG."
+}
+
+Implementation details:
+
+Schemas:
+Create Pydantic models for:
+- AskAIRequest
+- AskAIResponse
+- SourceClassificationRequest
+- SourceClassificationResponse
+- DocumentSummaryRequest
+- DocumentSummaryResponse
+- DocumentUploadRequest
+- DocumentUploadResponse
+- CreditContext
+- DocumentChunk
+
+Mock repositories:
+
+mock_credit_repository.py should contain sample credits:
+EC-101:
+  source: Solar
+  category: Renewable
+  quantity_kwh: 100
+  available_kwh: 100
+  retired_qty: 0
+  status: Available
+  owner_wallet: 0x8aF2c9dA91F0e4b78C91F
+  rate: 0.00045 ETH/kWh
+
+EC-118:
+  source: Wind
+  category: Renewable
+  quantity_kwh: 250
+  available_kwh: 250
+  retired_qty: 0
+  status: Available
+  owner_wallet: 0x8aF2c9dA91F0e4b78C91F
+  rate: 0.00044 ETH/kWh
+
+EC-203:
+  source: Gas
+  category: Fossil
+  quantity_kwh: 80
+  available_kwh: 80
+  retired_qty: 0
+  status: Available
+  owner_wallet: 0xExternalWallet
+  rate: 0.00022 ETH/kWh
+
+mock_audit_repository.py should contain audit events:
+- System initialized
+- EC-101 created: 100 kWh from Solar
+- EC-101 verified: eligible for minting
+- EC-101 listed in marketplace
+- EC-118 created: 250 kWh from Wind
+- EC-118 listed in marketplace
+- EC-203 created: 80 kWh from Gas
+- EC-203 listed in marketplace
+
+mock_document_repository.py should contain mock document chunks:
+1. electricity_credit_rules.pdf:
+"One electricity credit represents 1 kWh of verified electricity generation."
+
+2. source_classification_rules.pdf:
+"Solar, wind, and hydro are renewable electricity sources. Coal, gas, and thermal are fossil sources and should not be marked as green."
+
+3. retirement_policy.pdf:
+"Retired credits cannot be bought, sold, transferred, listed, or reused. Retirement prevents double counting."
+
+4. marketplace_rules.pdf:
+"Only available credits can be bought. Sold out or retired credits cannot be purchased."
+
+5. meter_report_rules.pdf:
+"A valid meter report should include meter ID, generation period, energy generated in kWh, generation source, and proof document."
+
+Services:
+
+rag_service.py:
+- implement retrieve_context(question: str) -> list[DocumentChunk]
+- use keyword matching for MVP
+- return top relevant chunks based on keywords:
+  - renewable, solar, wind, hydro, gas, coal, thermal -> source_classification_rules.pdf
+  - retire, retired, retirement -> retirement_policy.pdf
+  - marketplace, buy, sold, available -> marketplace_rules.pdf
+  - meter, document, proof -> meter_report_rules.pdf
+  - kWh, credit -> electricity_credit_rules.pdf
+
+registry_context_service.py:
+- detect_credit_id(question: str) using regex pattern EC-\d+
+- get_credit_context(credit_id: str)
+- get_audit_context(credit_id: str)
+- get_marketplace_summary()
+- get_user_credit_summary(wallet_address: str)
+
+prompt_service.py:
+- build_prompt(question, retrieved_chunks, registry_context)
+- include strict system rules:
+  "Each credit = 1 kWh."
+  "Do not call fossil credits green."
+  "Retired credits cannot be bought, sold, transferred, or reused."
+  "Use only provided context."
+  "If data is missing, say it is not available."
+
+bedrock_service.py:
+- implement generate_answer(prompt: str, question: str, context: dict) -> str
+- for MVP, do not call real Bedrock
+- implement deterministic mock answer logic:
+  - if credit_id found, explain source/category/status/availability
+  - if source classification question, explain classification
+  - if retirement question, explain retirement rule
+  - if marketplace question, summarize marketplace stats
+  - else provide a helpful general answer based on context
+- add TODO comments for real Amazon Bedrock integration
+
+ai_guardrail_service.py:
+- implement apply_guardrails(answer: str) -> str
+- if answer contains "gas is green" or "coal is green", correct it
+- if answer suggests retired credits can be bought, correct it
+- append warning if context is missing:
+  "This answer is based on available MVP registry context."
+
+document_service.py:
+- save_document_metadata()
+- mock_index_document()
+- summarize_document()
+- return placeholder summary based on mock document repository
+
+ai_routes.py:
+- implement all /ai endpoints
+- use APIRouter
+- clean error handling with HTTPException
+- return structured JSON
+
+document_routes.py:
+- implement /documents/upload
+- use APIRouter
+
+main.py:
+- create FastAPI app
+- add CORS middleware
+- include routers
+- root endpoint
+- health endpoint
+
+config.py:
+Use environment variables with defaults:
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=anthropic.claude-3-sonnet
+OPENSEARCH_ENDPOINT=http://localhost:9200
+S3_BUCKET_NAME=mock-greengrid-documents
+APP_NAME=GreenGrid Exchange RAG AI
+
+README.md should include:
+- project overview
+- run commands
+- API endpoint list
+- sample curl for /ai/ask
+- sample curl for /ai/source-classification
+- sample curl for /documents/upload
+- note that AWS Bedrock, S3, and OpenSearch are mocked for MVP
+
+requirements.txt should include:
+fastapi
+uvicorn
+pydantic
+python-dotenv
+
+Quality requirements:
+- Code should be modular and easy to extend.
+- Do not hardcode logic inside route functions.
+- Add comments where real Bedrock, S3, and OpenSearch integrations should be added.
+- Use type hints.
+- Use clear function names.
+- Make it runnable using:
+  uvicorn app.main:app --reload
+
+Also include example responses for these questions:
+1. "Is EC-101 valid and renewable?"
+2. "Can gas credits be marked as green?"
+3. "Explain audit trail of EC-101"
+4. "How many credits are available in marketplace?"
+5. "What documents are needed to create credits?"
