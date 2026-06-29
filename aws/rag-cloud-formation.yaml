@@ -11,6 +11,20 @@ Parameters:
     Type: String
     Default: '2026-07-06'
     Description: Date when resources should be cleaned up (YYYY-MM-DD)
+  
+  GitHubRepository:
+    Type: String
+    Default: 'https://github.com/ankit-1999/Rag-green-exchange.git'
+    Description: GitHub repository URL for the application
+  
+  AWSRegion:
+    Type: String
+    Default: ap-southeast-1
+    AllowedValues:
+      - ap-southeast-1
+      - ap-south-1
+      - us-east-1
+    Description: AWS Region (ap-southeast-1 for Singapore closest to India with Bedrock support)
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -20,11 +34,17 @@ Metadata:
         Parameters:
           - Environment
           - POCExpirationDate
+          - AWSRegion
+          - GitHubRepository
     ParameterLabels:
       Environment:
         default: "Environment Name"
       POCExpirationDate:
         default: "POC Expiration Date"
+      AWSRegion:
+        default: "AWS Region (ap-southeast-1 recommended for India)"
+      GitHubRepository:
+        default: "GitHub Repository URL"
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -191,8 +211,8 @@ Resources:
             Action:
               - bedrock:InvokeModel
             Resource:
-              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
-              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/amazon.titan-embed-text-v2:0'
+              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -212,7 +232,7 @@ Resources:
               - es:ESHttpPut
               - es:ESHttpDelete
             Resource:
-              - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/greengrid-docs-${Environment}/*'
+              - !Sub 'arn:aws:es:${AWSRegion}:${AWS::AccountId}:domain/greengrid-docs-${Environment}/*'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -231,7 +251,7 @@ Resources:
               - logs:PutLogEvents
               - logs:DescribeLogStreams
             Resource:
-              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/greengrid/*'
+              - !Sub 'arn:aws:logs:${AWSRegion}:${AWS::AccountId}:log-group:/greengrid/*'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -342,7 +362,7 @@ Resources:
                 "Service": "es.amazonaws.com"
               },
               "Action": "logs:PutLogEvents",
-              "Resource": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/opensearch/*"
+              "Resource": "arn:aws:logs:${AWSRegion}:${AWS::AccountId}:log-group:/aws/opensearch/*"
             }
           ]
         }
@@ -381,8 +401,10 @@ Resources:
           mkdir -p /opt/greengrid
           cd /opt/greengrid
           
-          # Clone repository (replace with your repo)
-          git clone https://github.com/your-org/greenexchange.git . || echo "Git clone skipped - set your repo URL"
+          # Clone repository from GitHub
+          cd /opt/greengrid
+          git clone ${GitHubRepository} . 
+          cd Rag-green-exchange
           
           # Create virtual environment
           python3 -m venv venv
@@ -395,7 +417,7 @@ Resources:
           
           # Create .env file
           cat > Rag-green-exchange/.env << 'EOF'
-          AWS_REGION=${AWS::Region}
+          AWS_REGION=${AWSRegion}
           OPENSEARCH_ENDPOINT=https://${OpenSearchDomain.DomainEndpoint}
           OPENSEARCH_INDEX_NAME=greengrid-docs
           OPENSEARCH_USE_AWS_AUTH=true
