@@ -21,6 +21,7 @@ import io
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 import boto3
 from botocore.exceptions import ClientError, BotoCoreError
@@ -36,14 +37,14 @@ from app.services import chunker_service, bedrock_service, opensearch_service
 logger = logging.getLogger(__name__)
 
 # In-memory metadata store (replaced by DB in Phase 2)
-_document_metadata_store: dict[str, DocumentMetadata] = {}
+_document_metadata_store: Dict[str, DocumentMetadata] = {}
 
 
 # ---------------------------------------------------------------------------
 # S3 helpers
 # ---------------------------------------------------------------------------
 
-def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
+def _parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
     """
     Parse 's3://bucket/key/path.pdf' → ('bucket', 'key/path.pdf').
 
@@ -152,7 +153,7 @@ def ingest_document(request: DocumentUploadRequest) -> DocumentUploadResponse:
         )
 
     # Step 4 — chunk
-    chunks: list[str] = chunker_service.chunk_text(text)
+    chunks: List[str] = chunker_service.chunk_text(text)
     if not chunks:
         return DocumentUploadResponse(
             document_id=document_id,
@@ -164,7 +165,7 @@ def ingest_document(request: DocumentUploadRequest) -> DocumentUploadResponse:
 
     # Steps 5 + 6 — embed and index each chunk
     indexed_count = 0
-    failed_chunks: list[int] = []
+    failed_chunks: List[int] = []
 
     for idx, chunk_text in enumerate(chunks):
         chunk_id = f"{document_id}_chunk_{idx}"
@@ -226,11 +227,11 @@ def ingest_document(request: DocumentUploadRequest) -> DocumentUploadResponse:
     )
 
 
-def get_document_metadata(document_id: str) -> DocumentMetadata | None:
+def get_document_metadata(document_id: str) -> Optional[DocumentMetadata]:
     """Return stored metadata for a document, or None if not found."""
     return _document_metadata_store.get(document_id)
 
 
-def list_documents() -> list[DocumentMetadata]:
+def list_documents() -> List[DocumentMetadata]:
     """Return all ingested document metadata records."""
     return list(_document_metadata_store.values())

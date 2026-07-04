@@ -15,6 +15,7 @@ TODO (real integration):
 
 import json
 import logging
+from typing import List
 import boto3
 from botocore.exceptions import ClientError, BotoCoreError
 
@@ -36,7 +37,7 @@ def _get_bedrock_client():
 # Embedding
 # ---------------------------------------------------------------------------
 
-def embed_text(text: str) -> list[float]:
+def embed_text(text: str) -> List[float]:
     """
     Generate an embedding vector for *text* using Titan Text Embeddings V2.
 
@@ -57,7 +58,7 @@ def embed_text(text: str) -> list[float]:
             body=body,
         )
         result = json.loads(response["body"].read())
-        embedding: list[float] = result["embedding"]
+        embedding: List[float] = result["embedding"]
 
         logger.debug(
             "embed_text: model=%s dim=%d text_preview='%.60s'",

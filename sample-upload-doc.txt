@@ -1,0 +1,31 @@
+GreenGrid Exchange - Sample Document for Upload API Test
+
+Document Type: GUIDE
+Purpose: Validate the end-to-end ingestion pipeline (S3 -> API -> Bedrock -> OpenSearch).
+
+Overview:
+GreenGrid Exchange is a rooftop solar peer-to-peer marketplace concept. Producers can share excess energy and consumers can discover available supply.
+
+Business Rules:
+1. Every producer must have a verified rooftop solar installation.
+2. Trading windows are 15-minute intervals.
+3. Settlement is computed daily based on successful energy transfer logs.
+4. Regulatory overrides take precedence over marketplace bids.
+
+Compliance Notes:
+- All transactions must be auditable.
+- Meter readings must be retained for dispute resolution.
+- User identity verification is required before settlement.
+
+Operational Workflow:
+Step 1: User uploads policy or guide document to S3.
+Step 2: Upload API receives document metadata and S3 URI.
+Step 3: Service fetches text, chunks content, generates embeddings, and indexes chunks.
+Step 4: Retrieval API uses semantic search against OpenSearch indexed chunks.
+
+Expected Test Outcome:
+- Upload API returns status indexed or partial.
+- Document appears in list endpoint.
+- Health endpoint remains responsive during ingestion.
+
+End of sample file.

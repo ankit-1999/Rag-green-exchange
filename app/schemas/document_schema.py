@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict
 from pydantic import BaseModel, Field
 
 
@@ -61,4 +61,4 @@ class DocumentMetadata(BaseModel):
     s3_uri: str
     chunk_count: int
     indexed_at: datetime = Field(default_factory=datetime.utcnow)
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: Dict[str, Any] = Field(default_factory=dict)

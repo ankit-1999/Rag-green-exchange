@@ -211,8 +211,8 @@ Resources:
             Action:
               - bedrock:InvokeModel
             Resource:
-              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/amazon.titan-embed-text-v2:0'
-              - !Sub 'arn:aws:bedrock:${AWSRegion}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -311,12 +311,19 @@ Resources:
         EBSEnabled: true
         VolumeType: gp3
         VolumeSize: 10
-      AdvancedSecurityOptions:
-        Enabled: true
-        InternalUserDatabaseEnabled: true
-        MasterUserOptions:
-          MasterUserName: admin
-          MasterUserPassword: !Sub 'GreenGrid${AWS::AccountId}!'  # Change in production
+      AccessPolicies:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt GreenGridEC2Role.Arn
+            Action:
+              - es:ESHttpGet
+              - es:ESHttpHead
+              - es:ESHttpPost
+              - es:ESHttpPut
+              - es:ESHttpDelete
+            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/greengrid-docs-${Environment}/*'
       LogPublishingOptions:
         ES_APPLICATION_LOGS:
           CloudWatchLogsLogGroupArn: !GetAtt OpenSearchLogGroup.Arn
@@ -401,7 +408,10 @@ Resources:
           
           # Update system
           yum update -y
-          yum install -y git python3 python3-pip
+          yum install -y git amazon-linux-extras
+          amazon-linux-extras enable python3.8
+          yum clean metadata
+          yum install -y python38 python38-pip
           
           # Create app directory
           mkdir -p /opt/greengrid
@@ -412,8 +422,9 @@ Resources:
           git clone ${GitHubRepository} .
           
           # Create virtual environment
-          python3 -m venv venv
+          python3.8 -m venv venv
           source venv/bin/activate
+          pip install --upgrade pip setuptools wheel
           
           # Install dependencies (if app exists)
           if [ -f requirements.txt ]; then
@@ -422,7 +433,7 @@ Resources:
           
           # Create .env file
           cat > .env << 'EOF'
-          AWS_REGION=${AWSRegion}
+          AWS_REGION=${AWS::Region}
           OPENSEARCH_ENDPOINT=https://${OpenSearchDomain.DomainEndpoint}
           OPENSEARCH_INDEX_NAME=greengrid-docs
           OPENSEARCH_USE_AWS_AUTH=true
@@ -443,6 +454,7 @@ Resources:
           Type=simple
           User=ec2-user
           WorkingDirectory=/opt/greengrid
+          EnvironmentFile=/opt/greengrid/.env
           ExecStart=/opt/greengrid/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
           Restart=on-failure
           RestartSec=10

@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routes.document_routes import router as document_router
+from app.routes.query_routes import router as query_router
 from app.services import opensearch_service
 
 logging.basicConfig(
@@ -69,6 +70,7 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(document_router)
+app.include_router(query_router)
 
 # AI/RAG router will be added here in the next phase:
 # from app.routes.ai_routes import router as ai_router

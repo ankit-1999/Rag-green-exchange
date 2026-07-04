@@ -19,6 +19,7 @@ TODO (real integration):
 
 import logging
 from datetime import datetime, timezone
+from typing import Dict, List
 
 import boto3
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
@@ -133,7 +134,7 @@ def index_chunk(
     document_type: str,
     chunk_index: int,
     text: str,
-    embedding: list[float],
+    embedding: List[float],
     s3_uri: str,
 ) -> None:
     """
@@ -170,9 +171,9 @@ def index_chunk(
 # ---------------------------------------------------------------------------
 
 def search_similar_chunks(
-    query_embedding: list[float],
+    query_embedding: List[float],
     top_k: int = settings.OPENSEARCH_TOP_K,
-) -> list[dict]:
+) -> List[Dict]:
     """
     Perform a kNN similarity search using the query embedding vector.
 

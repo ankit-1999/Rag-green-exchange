@@ -9,6 +9,7 @@ Token-based chunking can be swapped in later by replacing _estimate_tokens().
 """
 
 import logging
+from typing import List
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def chunk_text(
     text: str,
     chunk_size: int = settings.CHUNK_SIZE_TOKENS,
     overlap: int = settings.CHUNK_OVERLAP_TOKENS,
-) -> list[str]:
+) -> List[str]:
     """
     Split *text* into overlapping chunks.
 
@@ -57,7 +58,7 @@ def chunk_text(
             f"overlap ({overlap} tokens) must be smaller than chunk_size ({chunk_size} tokens)"
         )
 
-    chunks: list[str] = []
+    chunks: List[str] = []
     start = 0
 
     while start < len(text):

@@ -11,6 +11,7 @@ GET  /documents/{document_id} Get metadata for a specific document
 """
 
 import logging
+from typing import List
 from fastapi import APIRouter, HTTPException, status
 
 from app.schemas.document_schema import (
@@ -66,10 +67,10 @@ async def upload_document(request: DocumentUploadRequest) -> DocumentUploadRespo
 
 @router.get(
     "",
-    response_model=list[DocumentMetadata],
+    response_model=List[DocumentMetadata],
     summary="List all ingested documents",
 )
-async def list_documents() -> list[DocumentMetadata]:
+async def list_documents() -> List[DocumentMetadata]:
     return document_service.list_documents()
 
 
