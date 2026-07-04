@@ -232,7 +232,7 @@ Resources:
               - es:ESHttpPut
               - es:ESHttpDelete
             Resource:
-              - !Sub 'arn:aws:es:${AWSRegion}:${AWS::AccountId}:domain/greengrid-docs-${Environment}/*'
+              - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/greengrid-docs-${Environment}/*'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -251,7 +251,7 @@ Resources:
               - logs:PutLogEvents
               - logs:DescribeLogStreams
             Resource:
-              - !Sub 'arn:aws:logs:${AWSRegion}:${AWS::AccountId}:log-group:/greengrid/*'
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/greengrid/*'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -285,8 +285,10 @@ Resources:
   # ---------------------------------------------------------------------------
 
   OpenSearchDomain:
-    Type: AWS::OpenSearchServiceDomains::Domain
-    DependsOn: OpenSearchServiceLinkedRole
+    Type: AWS::OpenSearchService::Domain
+    DependsOn:
+      - OpenSearchServiceLinkedRole
+      - OpenSearchLogGroupPolicy
     Properties:
       DomainName: !Sub 'greengrid-docs-${Environment}'
       EngineVersion: OpenSearch_2.13
@@ -294,18 +296,17 @@ Resources:
         Enabled: true
       EncryptionAtRestOptions:
         Enabled: true
-        KmsKeyId: alias/aws/opensearch
+      ClusterConfig:
+        InstanceType: t3.small.search
+        InstanceCount: 1
       DomainEndpointOptions:
-        EnforceHttps: true
-        TlsSecurityPolicy: 'Policy-Min-TLS-1-2-2019-07'
-      NodeType: t3.small.search
-      DomainEndpointType: VPC
+        EnforceHTTPS: true
+        TLSSecurityPolicy: 'Policy-Min-TLS-1-2-2019-07'
       VPCOptions:
         SubnetIds:
           - !Ref PublicSubnet
         SecurityGroupIds:
           - !Ref OpenSearchSecurityGroup
-      InstanceCount: 1
       EBSOptions:
         EBSEnabled: true
         VolumeType: gp3
@@ -352,7 +353,7 @@ Resources:
     Type: AWS::Logs::ResourcePolicy
     Properties:
       PolicyName: !Sub 'greengrid-opensearch-logs-${Environment}'
-      PolicyText: !Sub |
+      PolicyDocument: !Sub |
         {
           "Version": "2012-10-17",
           "Statement": [
@@ -361,8 +362,15 @@ Resources:
               "Principal": {
                 "Service": "es.amazonaws.com"
               },
-              "Action": "logs:PutLogEvents",
-              "Resource": "arn:aws:logs:${AWSRegion}:${AWS::AccountId}:log-group:/aws/opensearch/*"
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "logs:DescribeLogStreams"
+              ],
+              "Resource": [
+                "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/opensearch/greengrid/${Environment}/application-logs:*",
+                "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/opensearch/greengrid/${Environment}/index-slow-logs:*"
+              ]
             }
           ]
         }
@@ -381,13 +389,11 @@ Resources:
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
         - !Ref EC2SecurityGroup
-      TagSpecifications:
-        - ResourceType: instance
-          Tags:
-            - Key: Name
-              Value: !Sub 'greengrid-app-${Environment}'
-            - Key: ExpiresOn
-              Value: !Ref POCExpirationDate
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-app-${Environment}'
+        - Key: ExpiresOn
+          Value: !Ref POCExpirationDate
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -403,20 +409,19 @@ Resources:
           
           # Clone repository from GitHub
           cd /opt/greengrid
-          git clone ${GitHubRepository} . 
-          cd Rag-green-exchange
+          git clone ${GitHubRepository} .
           
           # Create virtual environment
           python3 -m venv venv
           source venv/bin/activate
           
           # Install dependencies (if app exists)
-          if [ -f Rag-green-exchange/requirements.txt ]; then
-            pip install -r Rag-green-exchange/requirements.txt
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
           fi
           
           # Create .env file
-          cat > Rag-green-exchange/.env << 'EOF'
+          cat > .env << 'EOF'
           AWS_REGION=${AWSRegion}
           OPENSEARCH_ENDPOINT=https://${OpenSearchDomain.DomainEndpoint}
           OPENSEARCH_INDEX_NAME=greengrid-docs
@@ -437,7 +442,7 @@ Resources:
           [Service]
           Type=simple
           User=ec2-user
-          WorkingDirectory=/opt/greengrid/Rag-green-exchange
+          WorkingDirectory=/opt/greengrid
           ExecStart=/opt/greengrid/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
           Restart=on-failure
           RestartSec=10
@@ -455,58 +460,6 @@ Resources:
           
           echo "EC2 setup complete"
 
-  # ---------------------------------------------------------------------------
-  # CloudWatch Alarms for Budget Monitoring
-  # ---------------------------------------------------------------------------
-
-  BudgetAlarm15:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'greengrid-budget-alert-15-${Environment}'
-      AlarmDescription: Alert when estimated charges reach $15
-      MetricName: EstimatedCharges
-      Namespace: AWS/Billing
-      Statistic: Maximum
-      Period: 3600
-      EvaluationPeriods: 1
-      Threshold: 15
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: Currency
-          Value: USD
-
-  BudgetAlarm30:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'greengrid-budget-alert-30-${Environment}'
-      AlarmDescription: Alert when estimated charges reach $30
-      MetricName: EstimatedCharges
-      Namespace: AWS/Billing
-      Statistic: Maximum
-      Period: 3600
-      EvaluationPeriods: 1
-      Threshold: 30
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: Currency
-          Value: USD
-
-  BudgetAlarm50:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'greengrid-budget-alert-50-${Environment}'
-      AlarmDescription: CRITICAL: Alert when estimated charges reach $50
-      MetricName: EstimatedCharges
-      Namespace: AWS/Billing
-      Statistic: Maximum
-      Period: 3600
-      EvaluationPeriods: 1
-      Threshold: 50
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: Currency
-          Value: USD
-
 Outputs:
   EC2PublicIP:
     Description: Public IP of the EC2 instance
@@ -518,25 +471,25 @@ Outputs:
     Description: FastAPI application endpoint
     Value: !Sub 'http://${EC2Instance.PublicDnsName}:8000'
     Export:
-      Name: !Sub '${environment}-API-Endpoint'
+      Name: !Sub '${Environment}-API-Endpoint'
 
   ApiDocsEndpoint:
     Description: Swagger UI endpoint
     Value: !Sub 'http://${EC2Instance.PublicDnsName}:8000/docs'
     Export:
-      Name: !Sub '${environment}-API-Docs'
+      Name: !Sub '${Environment}-API-Docs'
 
   OpenSearchEndpoint:
     Description: OpenSearch domain endpoint
     Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
     Export:
-      Name: !Sub '${environment}-OpenSearch-Endpoint'
+      Name: !Sub '${Environment}-OpenSearch-Endpoint'
 
   DocumentBucketName:
     Description: S3 bucket for documents
     Value: !Ref DocumentBucket
     Export:
-      Name: !Sub '${environment}-Document-Bucket'
+      Name: !Sub '${Environment}-Document-Bucket'
 
   SSHCommand:
     Description: SSH command to connect to EC2 instance
