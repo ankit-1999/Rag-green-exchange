@@ -22,7 +22,7 @@ class Settings:
         os.getenv("BEDROCK_EMBEDDING_DIMENSION", "1024")
     )
     BEDROCK_LLM_MODEL_ID: str = os.getenv(
-        "BEDROCK_LLM_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0"
+        "BEDROCK_LLM_MODEL_ID", "anthropic.claude-3-5-haiku-20241022-v1:0"
     )
     BEDROCK_LLM_MAX_TOKENS: int = int(os.getenv("BEDROCK_LLM_MAX_TOKENS", "1024"))
     BEDROCK_LLM_TEMPERATURE: float = float(

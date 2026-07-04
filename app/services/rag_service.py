@@ -8,6 +8,22 @@ from app.services import bedrock_service, opensearch_service, prompt_service
 logger = logging.getLogger(__name__)
 
 
+def _build_fallback_answer(hits: List[Dict], generation_error: Exception) -> str:
+    """Return an extractive fallback answer when LLM generation is unavailable."""
+    snippets: List[str] = []
+    for idx, hit in enumerate(hits[:3], start=1):
+        text = (hit.get("text", "") or "").strip().replace("\n", " ")
+        if text:
+            snippets.append(f"{idx}. {text[:280]}")
+
+    fallback_context = "\n".join(snippets) if snippets else "No retrievable snippets available."
+    return (
+        "The generative model is currently unavailable, so this is an extractive fallback from retrieved context.\n"
+        f"Reason: {generation_error}\n\n"
+        f"Top retrieved snippets:\n{fallback_context}"
+    )
+
+
 def answer_question(request: QueryRequest) -> QueryResponse:
     """
     End-to-end RAG flow:
@@ -32,7 +48,11 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         )
 
     prompt = prompt_service.build_rag_prompt(request.question, hits)
-    answer = bedrock_service.generate_answer(prompt)
+    try:
+        answer = bedrock_service.generate_answer(prompt)
+    except RuntimeError as exc:
+        logger.warning("LLM generation unavailable, returning fallback answer: %s", exc)
+        answer = _build_fallback_answer(hits, exc)
 
     sources: List[QuerySource] = []
     for hit in hits:
