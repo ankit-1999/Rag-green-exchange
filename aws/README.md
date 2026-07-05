@@ -32,7 +32,8 @@ Follow the steps in **`AWS-DEPLOYMENT-STEPS.md`**:
 - Click "Model access"
 - Enable:
   - `amazon.titan-embed-text-v2:0`
-   - `anthropic.claude-haiku-4-5-20251001-v1:0`
+   - `amazon.nova-micro-v1:0` (recommended)
+   - `amazon.nova-lite-v1:0` (optional fallback)
 
 ### 3. Test (5 minutes)
 

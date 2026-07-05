@@ -173,7 +173,8 @@ CloudFormation created the infrastructure, but Bedrock models still need approva
 4. Click the **"Manage model access"** button
 5. Search for and enable:
    - [ ] `amazon.titan-embed-text-v2:0`
-   - [ ] `anthropic.claude-haiku-4-5-20251001-v1:0`
+   - [ ] `amazon.nova-micro-v1:0` (recommended)
+   - [ ] `amazon.nova-lite-v1:0` (optional fallback)
 6. Click **"Save changes"**
 
 **Status:**

@@ -325,7 +325,8 @@ BedrockPolicy:
             - bedrock:InvokeModel
           Resource:
             - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
-            - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0'
+            - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0'
+            - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0'
 ```
 
 **Why:** Grants EC2 permission to call Bedrock for embeddings and text generation.

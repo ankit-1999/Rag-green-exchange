@@ -79,7 +79,7 @@ def embed_text(text: str) -> List[float]:
 
 def generate_answer(prompt: str) -> str:
     """
-    Send *prompt* to Claude 3 Haiku and return the model's text response.
+    Send *prompt* to the configured Bedrock chat model and return text response.
 
     The prompt is expected to already contain the system instructions,
     retrieved context, and user question assembled by prompt_service.
@@ -90,35 +90,35 @@ def generate_answer(prompt: str) -> str:
     """
     client = _get_bedrock_client()
 
-    # Claude 3 Messages API format
-    body = json.dumps(
-        {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": settings.BEDROCK_LLM_MAX_TOKENS,
-            "temperature": settings.BEDROCK_LLM_TEMPERATURE,
-            "messages": [
+    try:
+        # Bedrock Converse API provides a common request/response shape across
+        # providers (Anthropic, Nova, etc.), reducing model-specific branching.
+        response = client.converse(
+            modelId=settings.BEDROCK_LLM_MODEL_ID,
+            messages=[
                 {
                     "role": "user",
-                    "content": prompt,
+                    "content": [{"text": prompt}],
                 }
             ],
-        }
-    )
-
-    try:
-        response = _get_bedrock_client().invoke_model(
-            modelId=settings.BEDROCK_LLM_MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=body,
+            inferenceConfig={
+                "maxTokens": settings.BEDROCK_LLM_MAX_TOKENS,
+                "temperature": settings.BEDROCK_LLM_TEMPERATURE,
+            },
         )
-        result = json.loads(response["body"].read())
-        answer: str = result["content"][0]["text"]
+        content_blocks = (
+            response.get("output", {})
+            .get("message", {})
+            .get("content", [])
+        )
+        answer = ""
+        if content_blocks:
+            answer = content_blocks[0].get("text", "")
 
         logger.info(
             "generate_answer: model=%s tokens_used=%s",
             settings.BEDROCK_LLM_MODEL_ID,
-            result.get("usage", {}).get("output_tokens", "unknown"),
+            response.get("usage", {}).get("outputTokens", "unknown"),
         )
         return answer
 

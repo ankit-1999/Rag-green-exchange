@@ -212,7 +212,8 @@ Resources:
               - bedrock:InvokeModel
             Resource:
               - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
-              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-lite-v1:0'
       Roles:
         - !Ref GreenGridEC2Role
 
@@ -439,7 +440,7 @@ Resources:
           OPENSEARCH_USE_AWS_AUTH=true
           S3_BUCKET_NAME=${DocumentBucket}
           BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
-          BEDROCK_LLM_MODEL_ID=anthropic.claude-haiku-4-5-20251001-v1:0
+          BEDROCK_LLM_MODEL_ID=amazon.nova-micro-v1:0
           APP_NAME=GreenGrid Exchange RAG AI
           DEBUG=false
           EOF
