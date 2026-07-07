@@ -222,3 +222,123 @@ def test_answer_question_executes_list_users_tool(monkeypatch):
     assert res.api_summary is not None
     assert captured["api_context"] is not None
     assert captured["api_context"]["tool_results"][0]["tool"] == "list_users"
+
+
+def test_answer_question_uses_api_data_when_no_vector_hits(monkeypatch):
+    monkeypatch.setattr("app.services.bedrock_service.embed_text", lambda _q: [0.1, 0.2])
+    monkeypatch.setattr(
+        "app.services.opensearch_service.search_similar_chunks",
+        lambda _emb, top_k: [],
+    )
+    monkeypatch.setattr(
+        "app.services.bedrock_service.plan_api_calls",
+        lambda _q: {
+            "requires_api_data": True,
+            "reason": "count question",
+            "tool_calls": [{"tool": "list_users", "arguments": {}}],
+        },
+    )
+    monkeypatch.setattr("app.services.user_service.list_users", lambda: [])
+    monkeypatch.setattr(
+        "app.services.bedrock_service.generate_answer",
+        lambda _p: "There are currently 0 users.",
+    )
+
+    res = rag_service.answer_question(QueryRequest(question="how many users are there", top_k=1))
+
+    assert res.answer == "There are currently 0 users."
+    assert res.source_count == 0
+    assert res.api_facts_used is True
+    assert res.answer_mode == "retrieval_plus_api"
+
+
+def test_answer_question_executes_credit_audit_by_id_tool(monkeypatch):
+    captured = {"api_context": None}
+
+    monkeypatch.setattr("app.services.bedrock_service.embed_text", lambda _q: [0.1, 0.2])
+    monkeypatch.setattr(
+        "app.services.opensearch_service.search_similar_chunks",
+        lambda _emb, top_k: [_sample_hit()],
+    )
+
+    def fake_prompt_builder(question, chunks, api_context=None):
+        captured["api_context"] = api_context
+        return "prompt"
+
+    monkeypatch.setattr("app.services.prompt_service.build_rag_prompt", fake_prompt_builder)
+    monkeypatch.setattr("app.services.bedrock_service.generate_answer", lambda _p: "timeline")
+    monkeypatch.setattr(
+        "app.services.bedrock_service.plan_api_calls",
+        lambda _q: {
+            "requires_api_data": True,
+            "reason": "history requested",
+            "tool_calls": [
+                {
+                    "tool": "list_credit_audit_by_credit_id",
+                    "arguments": {"credit_id": "credit_abc12345"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.credit_service.list_credit_audit_by_credit_id",
+        lambda _credit_id: [],
+    )
+
+    res = rag_service.answer_question(QueryRequest(question="show history", top_k=1))
+
+    assert res.api_facts_used is True
+    assert captured["api_context"] is not None
+    assert captured["api_context"]["tool_results"][0]["tool"] == "list_credit_audit_by_credit_id"
+
+
+def test_answer_question_executes_credit_history_timeline_tool(monkeypatch):
+    captured = {"api_context": None}
+
+    monkeypatch.setattr("app.services.bedrock_service.embed_text", lambda _q: [0.1, 0.2])
+    monkeypatch.setattr(
+        "app.services.opensearch_service.search_similar_chunks",
+        lambda _emb, top_k: [_sample_hit()],
+    )
+
+    def fake_prompt_builder(question, chunks, api_context=None):
+        captured["api_context"] = api_context
+        return "prompt"
+
+    monkeypatch.setattr("app.services.prompt_service.build_rag_prompt", fake_prompt_builder)
+    monkeypatch.setattr("app.services.bedrock_service.generate_answer", lambda _p: "history")
+    monkeypatch.setattr(
+        "app.services.bedrock_service.plan_api_calls",
+        lambda _q: {
+            "requires_api_data": True,
+            "reason": "history requested",
+            "tool_calls": [
+                {
+                    "tool": "get_credit_history_timeline",
+                    "arguments": {"credit_reference": "EC-101"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.credit_service.get_credit_history_timeline",
+        lambda _ref: {
+            "credit_id": "credit_ab12cd34",
+            "credit_code": "EC-101",
+            "current_owner_user_id": "user_2",
+            "timeline": [
+                {
+                    "timestamp": "2026-07-07T05:30:00+00:00",
+                    "operation": "create",
+                    "action": "Credit created by user_1",
+                }
+            ],
+            "timeline_text": "- 2026-07-07T05:30:00+00:00: Credit created by user_1",
+        },
+    )
+
+    res = rag_service.answer_question(QueryRequest(question="tell me history of EC-101", top_k=1))
+
+    assert res.api_facts_used is True
+    assert captured["api_context"] is not None
+    assert captured["api_context"]["tool_results"][0]["tool"] == "get_credit_history_timeline"

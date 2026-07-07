@@ -315,6 +315,107 @@ _TOOL_CATALOG: List[Dict] = [
         },
     },
     {
+        "name": "list_credits_created_by_user",
+        "purpose": "List all credits originally created by a specific user.",
+        "when_to_use": [
+            "Question asks what credits were created by a user",
+            "Need user-originated credit list",
+        ],
+        "payload_schema": {
+            "user_id": "string",
+        },
+        "response_schema": {
+            "credits": "list<object>",
+        },
+        "example_request": {"user_id": "user_1"},
+        "example_response": {
+            "credits": [
+                {
+                    "credit_id": "credit_ab12cd34",
+                    "credit_code": "EC-101",
+                    "user_id": "user_2",
+                    "credit_type": "solar",
+                    "price": 120.5,
+                    "created_at": "2026-07-07T05:30:00+00:00",
+                }
+            ]
+        },
+    },
+    {
+        "name": "list_credit_audit_by_credit_id",
+        "purpose": "Return full operation history for one credit id.",
+        "when_to_use": [
+            "Question asks credit history for a specific credit",
+            "Need timeline of create/transfer actions for one credit",
+        ],
+        "payload_schema": {
+            "credit_id": "string",
+        },
+        "response_schema": {
+            "audit_records": "list<object>",
+        },
+        "example_request": {"credit_id": "credit_ab12cd34"},
+        "example_response": {
+            "audit_records": [
+                {
+                    "event_id": "evt_1",
+                    "operation": "create",
+                    "credit_id": "credit_ab12cd34",
+                    "source_user_id": "user_1",
+                    "destination_user_id": "user_1",
+                    "created_at": "2026-07-07T05:30:00+00:00",
+                    "details": "Created solar credit at price 120.5",
+                },
+                {
+                    "event_id": "evt_2",
+                    "operation": "transfer",
+                    "credit_id": "credit_ab12cd34",
+                    "source_user_id": "user_1",
+                    "destination_user_id": "user_2",
+                    "created_at": "2026-07-07T05:35:00+00:00",
+                    "details": "Transferred ownership from user_1 to user_2",
+                }
+            ]
+        },
+    },
+    {
+        "name": "get_credit_history_timeline",
+        "purpose": "Return complete credit history in timeline form (create + transfers).",
+        "when_to_use": [
+            "Question asks history of a credit",
+            "Need timeline narration such as created by A then transferred to B",
+        ],
+        "payload_schema": {
+            "credit_reference": "string (EC-101 or internal credit_id)",
+        },
+        "response_schema": {
+            "credit_id": "string",
+            "credit_code": "string",
+            "current_owner_user_id": "string",
+            "timeline": "list<object>",
+            "timeline_text": "string",
+        },
+        "example_request": {"credit_reference": "EC-101"},
+        "example_response": {
+            "credit_id": "credit_ab12cd34",
+            "credit_code": "EC-101",
+            "current_owner_user_id": "user_2",
+            "timeline": [
+                {
+                    "timestamp": "2026-07-07T05:30:00+00:00",
+                    "operation": "create",
+                    "action": "Credit created by user_1",
+                },
+                {
+                    "timestamp": "2026-07-07T05:35:00+00:00",
+                    "operation": "transfer",
+                    "action": "Transferred from user_1 to user_2",
+                }
+            ],
+            "timeline_text": "- 2026-07-07T05:30:00+00:00: Credit created by user_1\n- 2026-07-07T05:35:00+00:00: Transferred from user_1 to user_2",
+        },
+    },
+    {
         "name": "transfer_credit",
         "purpose": "Transfer a credit from source user to destination user.",
         "when_to_use": [

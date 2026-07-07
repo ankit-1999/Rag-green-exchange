@@ -97,3 +97,60 @@ def test_createcredit_user_not_found():
         },
     )
     assert res.status_code == 400
+
+
+def test_credits_created_by_user_endpoint():
+    client = TestClient(app)
+    creator_id = _create_user(client, "Creator", role="seller")
+    _ = _create_user(client, "Other", role="buyer")
+
+    create_credit_res = client.post(
+        "/createcredit",
+        json={
+            "user_id": creator_id,
+            "credit_type": "solar",
+            "price": 50.0,
+        },
+    )
+    assert create_credit_res.status_code == 201
+
+    res = client.get(f"/credits/created-by/{creator_id}")
+    assert res.status_code == 200
+    payload = res.json()
+    assert isinstance(payload, list)
+    assert len(payload) >= 1
+    assert payload[0]["credit_id"].startswith("credit_")
+
+
+def test_credit_audit_by_credit_id_endpoint():
+    client = TestClient(app)
+    source_user_id = _create_user(client, "Src", role="seller")
+    destination_user_id = _create_user(client, "Dst", role="buyer")
+
+    create_credit_res = client.post(
+        "/createcredit",
+        json={
+            "user_id": source_user_id,
+            "credit_type": "wind",
+            "price": 77.0,
+        },
+    )
+    assert create_credit_res.status_code == 201
+    credit_id = create_credit_res.json()["credit_id"]
+
+    transfer_res = client.post(
+        "/credit/transfer",
+        json={
+            "credit_id": credit_id,
+            "source_user_id": source_user_id,
+            "destination_user_id": destination_user_id,
+        },
+    )
+    assert transfer_res.status_code == 200
+
+    audit_res = client.get(f"/audit/{credit_id}")
+    assert audit_res.status_code == 200
+    records = audit_res.json()
+    assert len(records) >= 2
+    assert any(rec["operation"] == "create" for rec in records)
+    assert any(rec["operation"] == "transfer" for rec in records)

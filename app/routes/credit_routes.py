@@ -49,6 +49,26 @@ async def list_credit_audit() -> List[CreditAuditRecord]:
     return credit_service.list_credit_audit()
 
 
+@router.get(
+    "/credits/created-by/{user_id}",
+    response_model=List[CreditResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List all credits created by a specific user",
+)
+async def list_credits_created_by_user(user_id: str) -> List[CreditResponse]:
+    return credit_service.list_credits_created_by_user(user_id)
+
+
+@router.get(
+    "/audit/{credit_id}",
+    response_model=List[CreditAuditRecord],
+    status_code=status.HTTP_200_OK,
+    summary="List audit trail for one credit",
+)
+async def list_credit_audit_by_credit_id(credit_id: str) -> List[CreditAuditRecord]:
+    return credit_service.list_credit_audit_by_credit_id(credit_id)
+
+
 @router.post(
     "/credit/transfer",
     response_model=CreditResponse,

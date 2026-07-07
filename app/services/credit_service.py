@@ -58,6 +58,69 @@ def list_credit_audit() -> List[CreditAuditRecord]:
     return list(_credit_audit_store)
 
 
+def list_credits_created_by_user(user_id: str) -> List[CreditResponse]:
+    """Return credits originally created by a given user (from create audit trail)."""
+    created_credit_ids = {
+        rec.credit_id
+        for rec in _credit_audit_store
+        if rec.operation == "create" and rec.source_user_id == user_id
+    }
+    credits: List[CreditResponse] = []
+    for credit_id in created_credit_ids:
+        credit = _credit_store.get(credit_id)
+        if credit is not None:
+            credits.append(credit)
+    return credits
+
+
+def list_credit_audit_by_credit_id(credit_id: str) -> List[CreditAuditRecord]:
+    """Return all audit records related to a single credit id."""
+    return [rec for rec in _credit_audit_store if rec.credit_id == credit_id]
+
+
+def get_credit_history_timeline(reference: str) -> Dict:
+    """
+    Build a human-readable timeline for a credit by code/id.
+
+    Returns machine + text timeline so LLM can directly answer history questions.
+    """
+    credit = get_credit_by_reference(reference)
+    records = list_credit_audit_by_credit_id(credit.credit_id)
+    records_sorted = sorted(records, key=lambda rec: rec.created_at)
+
+    timeline_items: List[Dict] = []
+    for rec in records_sorted:
+        action = (
+            f"Credit created by {rec.source_user_id}"
+            if rec.operation == "create"
+            else f"Transferred from {rec.source_user_id} to {rec.destination_user_id}"
+        )
+        timeline_items.append(
+            {
+                "timestamp": rec.created_at.isoformat(),
+                "operation": rec.operation,
+                "action": action,
+                "details": rec.details,
+            }
+        )
+
+    if timeline_items:
+        timeline_text = "\n".join(
+            f"- {item['timestamp']}: {item['action']}"
+            for item in timeline_items
+        )
+    else:
+        timeline_text = "No history records found for this credit."
+
+    return {
+        "credit_id": credit.credit_id,
+        "credit_code": credit.credit_code,
+        "current_owner_user_id": credit.user_id,
+        "timeline": timeline_items,
+        "timeline_text": timeline_text,
+    }
+
+
 def get_credit_by_reference(reference: str) -> CreditResponse:
     """Lookup credit by internal `credit_id` or business `credit_code` (e.g. EC-101)."""
     ref = reference.strip()

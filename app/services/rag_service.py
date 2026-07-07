@@ -115,6 +115,46 @@ def _execute_tool_call(tool_name: str, arguments: Dict) -> Optional[Dict]:
             },
         }
 
+    if tool_name == "list_credits_created_by_user":
+        user_id = str(arguments.get("user_id", "")).strip()
+        if not user_id:
+            return None
+        credits = [
+            credit.model_dump() for credit in credit_service.list_credits_created_by_user(user_id)
+        ]
+        return {
+            "tool": tool_name,
+            "data": {
+                "user_id": user_id,
+                "credits": credits,
+            },
+        }
+
+    if tool_name == "list_credit_audit_by_credit_id":
+        credit_id = str(arguments.get("credit_id", "")).strip()
+        if not credit_id:
+            return None
+        audit_records = [
+            rec.model_dump() for rec in credit_service.list_credit_audit_by_credit_id(credit_id)
+        ]
+        return {
+            "tool": tool_name,
+            "data": {
+                "credit_id": credit_id,
+                "audit_records": audit_records,
+            },
+        }
+
+    if tool_name == "get_credit_history_timeline":
+        credit_reference = str(arguments.get("credit_reference", "")).strip()
+        if not credit_reference:
+            return None
+        timeline = credit_service.get_credit_history_timeline(credit_reference)
+        return {
+            "tool": tool_name,
+            "data": timeline,
+        }
+
     if tool_name == "transfer_credit":
         request = CreditTransferRequest(**arguments)
         credit = credit_service.transfer_credit(request)
@@ -177,7 +217,7 @@ def _resolve_api_summary(question: str) -> Tuple[Optional[QueryApiSummary], bool
 
 def _build_fallback_answer(hits: List[Dict], generation_error: Exception) -> str:
     """Return a user-friendly fallback answer when generation is unavailable."""
-    return "I dont have the proper information about this, Pleas contact the Ankit for this 🙂"
+    return "I'm sorry, I don't have that information. Please get in touch with Ankit, who will be happy to help 🙂"
 
 
 def answer_question(request: QueryRequest) -> QueryResponse:
@@ -195,14 +235,14 @@ def answer_question(request: QueryRequest) -> QueryResponse:
     hits: List[Dict] = opensearch_service.search_similar_chunks(question_embedding, top_k=top_k)
     api_summary, api_facts_used = _resolve_api_summary(request.question)
 
-    if not hits:
+    if not hits and not api_facts_used:
         return QueryResponse(
-            answer="I dont have the proper information about this, Pleas contact the Ankit for this 🙂",
+            answer="I'm sorry, I don't have that information. Please get in touch with Ankit, who will be happy to help 🙂",
             source_count=0,
             sources=[],
             answer_mode="retrieval_only",
-            api_facts_used=api_facts_used,
-            api_summary=api_summary,
+            api_facts_used=False,
+            api_summary=None,
         )
 
     prompt = prompt_service.build_rag_prompt(
