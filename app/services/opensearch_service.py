@@ -204,11 +204,58 @@ def search_similar_chunks(
             src = hit["_source"]
             src["score"] = hit["_score"]
             hits.append(src)
-        logger.info("search_similar_chunks: returned %d hits", len(hits))
-        return hits
+
+        # Deduplicate repeated chunks that may exist from prior re-ingestions.
+        # Keep first occurrence (highest score because OpenSearch returns sorted hits).
+        unique_hits = []
+        seen_keys = set()
+        for src in hits:
+            key = (
+                src.get("s3_uri", ""),
+                int(src.get("chunk_index", 0)),
+                (src.get("text", "") or "")[:200],
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            unique_hits.append(src)
+            if len(unique_hits) >= top_k:
+                break
+
+        logger.info(
+            "search_similar_chunks: returned %d hits (%d after dedup)",
+            len(hits),
+            len(unique_hits),
+        )
+        return unique_hits
     except NotFoundError:
         logger.warning("OpenSearch index not found during search: %s", settings.OPENSEARCH_INDEX_NAME)
         return []
     except OpenSearchException as exc:
         logger.error("search_similar_chunks failed: %s", exc)
+        raise
+
+
+def clear_index_data() -> int:
+    """
+    Delete all indexed chunk documents from the configured OpenSearch index.
+
+    Returns number of deleted documents.
+    """
+    client = _get_client()
+    try:
+        response = client.delete_by_query(
+            index=settings.OPENSEARCH_INDEX_NAME,
+            body={"query": {"match_all": {}}},
+            conflicts="proceed",
+            refresh=True,
+        )
+        deleted = int(response.get("deleted", 0))
+        logger.info("clear_index_data: deleted %d chunks", deleted)
+        return deleted
+    except NotFoundError:
+        logger.warning("clear_index_data: index not found, nothing to delete")
+        return 0
+    except OpenSearchException as exc:
+        logger.error("clear_index_data failed: %s", exc)
         raise

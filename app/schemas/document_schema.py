@@ -35,6 +35,14 @@ class DocumentUploadResponse(BaseModel):
     message: str
 
 
+class DocumentClearIndexResponse(BaseModel):
+    """Returned after deleting indexed chunks from OpenSearch."""
+
+    deleted_chunks: int
+    cleared_documents: int
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Internal / shared models
 # ---------------------------------------------------------------------------

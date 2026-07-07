@@ -15,6 +15,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, status
 
 from app.schemas.document_schema import (
+    DocumentClearIndexResponse,
     DocumentUploadRequest,
     DocumentUploadResponse,
     DocumentMetadata,
@@ -72,6 +73,23 @@ async def upload_document(request: DocumentUploadRequest) -> DocumentUploadRespo
 )
 async def list_documents() -> List[DocumentMetadata]:
     return document_service.list_documents()
+
+
+@router.post(
+    "/clear-index",
+    response_model=DocumentClearIndexResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Clear all indexed chunks from OpenSearch",
+)
+async def clear_index() -> DocumentClearIndexResponse:
+    try:
+        return document_service.clear_indexed_chunks()
+    except RuntimeError as exc:
+        logger.error("Failed to clear OpenSearch index data: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Upstream service error: {exc}",
+        ) from exc
 
 
 @router.get(

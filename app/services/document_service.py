@@ -18,8 +18,8 @@ TODO (S3 integration):
 """
 
 import io
+import hashlib
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -28,6 +28,7 @@ from botocore.exceptions import ClientError, BotoCoreError
 
 from app.config import settings
 from app.schemas.document_schema import (
+    DocumentClearIndexResponse,
     DocumentUploadRequest,
     DocumentUploadResponse,
     DocumentMetadata,
@@ -81,6 +82,17 @@ def _fetch_document_from_s3(s3_uri: str) -> bytes:
         raise RuntimeError(f"S3 fetch failed: {exc}") from exc
 
 
+def _build_stable_document_id(s3_uri: str) -> str:
+    """
+    Build a deterministic document ID from S3 URI.
+
+    Re-ingesting the same object URI reuses the same document_id so chunk IDs are
+    overwritten instead of duplicated.
+    """
+    digest = hashlib.sha1(s3_uri.encode("utf-8")).hexdigest()[:12]
+    return f"doc_{digest}"
+
+
 def _extract_text(raw_bytes: bytes, document_name: str) -> str:
     """
     Extract plain text from document bytes.
@@ -127,7 +139,7 @@ def ingest_document(request: DocumentUploadRequest) -> DocumentUploadResponse:
     6. Index chunk + embedding in OpenSearch.
     7. Persist metadata and return response.
     """
-    document_id = f"doc_{uuid.uuid4().hex[:8]}"
+    document_id = _build_stable_document_id(request.s3_uri)
     logger.info(
         "Starting ingestion: document_id=%s name=%s s3_uri=%s",
         document_id,
@@ -235,3 +247,38 @@ def get_document_metadata(document_id: str) -> Optional[DocumentMetadata]:
 def list_documents() -> List[DocumentMetadata]:
     """Return all ingested document metadata records."""
     return list(_document_metadata_store.values())
+
+
+def get_documents_summary(sample_size: int = 5) -> Dict:
+    """
+    Return a compact operational summary of ingested documents.
+
+    This is used by RAG query orchestration for questions like
+    "how many documents are available" where metadata is better sourced from
+    application state than semantic retrieval chunks.
+    """
+    docs = list_documents()
+    by_type: Dict[str, int] = {}
+    for doc in docs:
+        by_type[doc.document_type] = by_type.get(doc.document_type, 0) + 1
+
+    sample_names: List[str] = [doc.document_name for doc in docs[: max(sample_size, 0)]]
+
+    return {
+        "total_documents": len(docs),
+        "by_type": by_type,
+        "sample_document_names": sample_names,
+    }
+
+
+def clear_indexed_chunks() -> DocumentClearIndexResponse:
+    """Remove all indexed chunks from OpenSearch and clear cached metadata."""
+    deleted_chunks = opensearch_service.clear_index_data()
+    cleared_documents = len(_document_metadata_store)
+    _document_metadata_store.clear()
+
+    return DocumentClearIndexResponse(
+        deleted_chunks=deleted_chunks,
+        cleared_documents=cleared_documents,
+        message="Indexed chunks and document metadata cleared successfully.",
+    )
