@@ -116,6 +116,54 @@ sudo journalctl -u greengrid-api -n 100 --no-pager
 
 ---
 
+## 3A. Deploy Latest Git Changes and Rerun App
+
+Use this when you pushed new code and want EC2 to run the latest commit.
+
+```bash
+# Go to app folder
+cd /opt/greengrid
+
+# Check working tree status (should be clean)
+git status
+
+# Pull latest code from main
+git fetch origin
+git checkout main
+git pull origin main
+
+# Refresh Python dependencies in existing venv
+source /opt/greengrid/venv/bin/activate
+pip install -r requirements.txt
+deactivate
+
+# Restart app with latest code
+sudo systemctl restart greengrid-api
+
+# Verify service and logs
+sudo systemctl status greengrid-api --no-pager
+sudo journalctl -u greengrid-api -n 100 --no-pager -l
+```
+
+**If `git pull` says unmerged files or local changes:**
+```bash
+cd /opt/greengrid
+cp .env /tmp/greengrid.env.backup.$(date +%F-%H%M%S)
+git merge --abort || true
+git reset --hard HEAD
+git clean -fd
+git fetch origin
+git checkout main
+git reset --hard origin/main
+
+# Restore your runtime env and restart
+LATEST_ENV_BACKUP=$(ls -1t /tmp/greengrid.env.backup.* | head -n 1)
+cp "$LATEST_ENV_BACKUP" /opt/greengrid/.env
+sudo systemctl restart greengrid-api
+```
+
+---
+
 ## 4. Stop / Start the EC2 Instance (Pause Billing)
 
 Stopping the EC2 **instance** (not just the app) pauses compute billing.
@@ -212,14 +260,14 @@ sudo systemctl restart greengrid-api
 curl http://localhost:8000/health
 
 # Upload a document (replace with your real S3 URI)
-curl -s -X POST http://localhost:8000/documents/ingest \
+curl -s -X POST http://localhost:8000/documents/upload \
   -H "Content-Type: application/json" \
-  -d '{"s3_uri": "s3://<your-bucket>/sample.pdf", "document_id": "doc-001"}'
+  -d '{"document_name":"sample.pdf","document_type":"GUIDE","s3_uri":"s3://<your-bucket>/sample.pdf"}'
 
 # Query the RAG system
 curl -s -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "Summarize key points", "top_k": 3}'
+  -d '{"question": "Summarize key points", "top_k": 3}'
 ```
 
 ---
