@@ -152,6 +152,7 @@ def plan_api_calls(question: str) -> Dict:
         f"TOOL_CATALOG:\n{tools_text}\n\n"
         "Rules:\n"
         "- If question asks for counts, ownership, price, or creation time, API data is usually required.\n"
+        "- If question is about user profile and includes a user_id like user_ab12cd34, use get_user.\n"
         "- If question is conceptual/explanatory and not about live operational values, API data is not required.\n"
         "- Return only valid JSON (no markdown, no explanation outside JSON).\n\n"
         "Output JSON schema:\n"

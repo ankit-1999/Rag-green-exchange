@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 from app.config import settings
@@ -24,7 +25,17 @@ from app.services import (
 logger = logging.getLogger(__name__)
 
 
-def _execute_tool_call(tool_name: str, arguments: Dict) -> Optional[Dict]:
+def _extract_user_id_from_question(question: str) -> Optional[str]:
+    match = re.search(r"\buser_[0-9a-f]{8}\b", question, flags=re.IGNORECASE)
+    return match.group(0) if match else None
+
+
+def _is_profile_question(question: str) -> bool:
+    q = question.lower()
+    return "profile" in q
+
+
+def _execute_tool_call(tool_name: str, arguments: Dict, question: str = "") -> Optional[Dict]:
     """Execute one approved tool call and return normalized result payload."""
     if tool_registry.get_tool_by_name(tool_name) is None:
         logger.info("Skipping tool not in registry: %s", tool_name)
@@ -37,6 +48,10 @@ def _execute_tool_call(tool_name: str, arguments: Dict) -> Optional[Dict]:
 
     if tool_name == "get_user":
         user_id = str(arguments.get("user_id", "")).strip()
+        if not user_id:
+            extracted_user_id = _extract_user_id_from_question(question)
+            if extracted_user_id:
+                user_id = extracted_user_id
         if not user_id:
             return None
         user = user_service.get_user(user_id)
@@ -167,10 +182,30 @@ def _execute_tool_call(tool_name: str, arguments: Dict) -> Optional[Dict]:
 def _resolve_api_summary(question: str) -> Tuple[Optional[QueryApiSummary], bool]:
     """Use LLM planner to decide and execute approved backend API tools."""
     plan = bedrock_service.plan_api_calls(question)
-    if not plan.get("requires_api_data", False):
+    requires_api_data = bool(plan.get("requires_api_data", False))
+    tool_calls = plan.get("tool_calls", [])
+
+    if _is_profile_question(question):
+        extracted_user_id = _extract_user_id_from_question(question)
+        if extracted_user_id:
+            has_get_user = any(
+                isinstance(call, dict) and str(call.get("tool", "")).strip() == "get_user"
+                for call in tool_calls if isinstance(tool_calls, list)
+            )
+            if not has_get_user:
+                if not isinstance(tool_calls, list):
+                    tool_calls = []
+                tool_calls.append(
+                    {
+                        "tool": "get_user",
+                        "arguments": {"user_id": extracted_user_id},
+                    }
+                )
+                requires_api_data = True
+
+    if not requires_api_data:
         return None, False
 
-    tool_calls = plan.get("tool_calls", [])
     if not isinstance(tool_calls, list) or not tool_calls:
         return None, False
 
@@ -183,7 +218,7 @@ def _resolve_api_summary(question: str) -> Tuple[Optional[QueryApiSummary], bool
         if not isinstance(arguments, dict):
             arguments = {}
         try:
-            result = _execute_tool_call(tool_name, arguments)
+            result = _execute_tool_call(tool_name, arguments, question=question)
             if result is not None:
                 tool_results.append(result)
         except Exception as exc:

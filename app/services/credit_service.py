@@ -15,6 +15,13 @@ _credit_audit_store: List[CreditAuditRecord] = []
 _credit_code_counter = 100
 
 
+def _get_user_display_name(user_id: str) -> str:
+    user = user_service.get_user(user_id)
+    if user is None:
+        return user_id
+    return f"{user.first_name} {user.last_name}".strip()
+
+
 def _next_credit_code() -> str:
     global _credit_code_counter
     _credit_code_counter += 1
@@ -41,7 +48,9 @@ def create_credit(request: CreateCreditRequest) -> CreditResponse:
             operation="create",
             credit_id=credit.credit_id,
             source_user_id=request.user_id,
+            source_name=_get_user_display_name(request.user_id),
             destination_user_id=request.user_id,
+            destination_name=_get_user_display_name(request.user_id),
             created_at=datetime.now(timezone.utc),
             details=f"Created {credit.credit_type.value} credit at price {credit.price}",
         )
@@ -90,23 +99,21 @@ def get_credit_history_timeline(reference: str) -> Dict:
 
     timeline_items: List[Dict] = []
     for rec in records_sorted:
-        action = (
-            f"Credit created by {rec.source_user_id}"
-            if rec.operation == "create"
-            else f"Transferred from {rec.source_user_id} to {rec.destination_user_id}"
-        )
+        action = f"{rec.source_name} -> {rec.destination_name} on {rec.created_at.isoformat()}"
         timeline_items.append(
             {
                 "timestamp": rec.created_at.isoformat(),
                 "operation": rec.operation,
                 "action": action,
                 "details": rec.details,
+                "source_name": rec.source_name,
+                "destination_name": rec.destination_name,
             }
         )
 
     if timeline_items:
         timeline_text = "\n".join(
-            f"- {item['timestamp']}: {item['action']}"
+            f"- {item['action']}"
             for item in timeline_items
         )
     else:
@@ -164,7 +171,9 @@ def transfer_credit(request: CreditTransferRequest) -> CreditResponse:
             operation="transfer",
             credit_id=request.credit_id,
             source_user_id=request.source_user_id,
+            source_name=_get_user_display_name(request.source_user_id),
             destination_user_id=request.destination_user_id,
+            destination_name=_get_user_display_name(request.destination_user_id),
             created_at=datetime.now(timezone.utc),
             details=(
                 f"Transferred ownership from {request.source_user_id} "

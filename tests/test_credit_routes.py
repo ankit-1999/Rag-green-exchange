@@ -81,7 +81,9 @@ def test_credit_transfer_and_audit():
         rec["operation"] == "transfer"
         and rec["credit_id"] == credit_id
         and rec["source_user_id"] == source_user_id
+        and rec["source_name"] == "SourceUser Test"
         and rec["destination_user_id"] == destination_user_id
+        and rec["destination_name"] == "DestUser Test"
         for rec in audit_records
     )
 

@@ -330,10 +330,10 @@ def test_answer_question_executes_credit_history_timeline_tool(monkeypatch):
                 {
                     "timestamp": "2026-07-07T05:30:00+00:00",
                     "operation": "create",
-                    "action": "Credit created by user_1",
+                    "action": "Alice Singh -> Alice Singh on 2026-07-07T05:30:00+00:00",
                 }
             ],
-            "timeline_text": "- 2026-07-07T05:30:00+00:00: Credit created by user_1",
+            "timeline_text": "- Alice Singh -> Alice Singh on 2026-07-07T05:30:00+00:00",
         },
     )
 
@@ -342,3 +342,52 @@ def test_answer_question_executes_credit_history_timeline_tool(monkeypatch):
     assert res.api_facts_used is True
     assert captured["api_context"] is not None
     assert captured["api_context"]["tool_results"][0]["tool"] == "get_credit_history_timeline"
+
+
+def test_profile_question_forces_get_user_with_id_in_question(monkeypatch):
+    captured = {"api_context": None}
+
+    monkeypatch.setattr("app.services.bedrock_service.embed_text", lambda _q: [0.1, 0.2])
+    monkeypatch.setattr(
+        "app.services.opensearch_service.search_similar_chunks",
+        lambda _emb, top_k: [],
+    )
+
+    def fake_prompt_builder(question, chunks, api_context=None):
+        captured["api_context"] = api_context
+        return "prompt"
+
+    monkeypatch.setattr("app.services.prompt_service.build_rag_prompt", fake_prompt_builder)
+    monkeypatch.setattr("app.services.bedrock_service.generate_answer", lambda _p: "profile summary")
+    monkeypatch.setattr(
+        "app.services.bedrock_service.plan_api_calls",
+        lambda _q: {
+            "requires_api_data": False,
+            "reason": "not needed",
+            "tool_calls": [],
+        },
+    )
+
+    class _User:
+        def model_dump(self):
+            return {
+                "user_id": "user_ab12cd34",
+                "first_name": "Ankit",
+                "last_name": "Singh",
+                "age": 27,
+                "city": "Noida",
+                "role": "seller",
+            }
+
+    monkeypatch.setattr(
+        "app.services.user_service.get_user",
+        lambda _uid: _User(),
+    )
+
+    res = rag_service.answer_question(
+        QueryRequest(question="tell me something about my profile user_ab12cd34", top_k=1)
+    )
+
+    assert res.api_facts_used is True
+    assert captured["api_context"] is not None
+    assert captured["api_context"]["tool_results"][0]["tool"] == "get_user"

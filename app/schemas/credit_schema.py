@@ -37,6 +37,8 @@ class CreditAuditRecord(BaseModel):
     operation: Literal["create", "transfer"]
     credit_id: str
     source_user_id: str
+    source_name: str
     destination_user_id: str
+    destination_name: str
     created_at: datetime
     details: str
