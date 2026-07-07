@@ -1,0 +1,224 @@
+GreenGrid Exchange - Full Functionality Knowledge Base
+Version: 2026-07-07
+Purpose: RAG ingestion document covering current end-to-end capabilities.
+
+============================================================
+1. SYSTEM OVERVIEW
+============================================================
+GreenGrid Exchange is a FastAPI-based backend that combines:
+- Document ingestion from S3
+- Vector indexing and semantic retrieval with OpenSearch
+- LLM answer generation with Amazon Bedrock
+- Operational APIs for users and credits
+- Model-driven tool-calling (LLM planner + backend executor mapping)
+
+Core architecture:
+- API layer: FastAPI routes
+- Service layer: business logic
+- Vector store: Amazon OpenSearch Service
+- Embeddings: Bedrock Titan Embeddings V2
+- Generation/planning: Bedrock chat model via Converse API
+
+============================================================
+2. CORE API ENDPOINTS
+============================================================
+2.1 Health and Root
+- GET /
+  Returns service metadata and running status.
+- GET /health
+  Returns health status payload.
+
+2.2 Document APIs
+- POST /documents/upload
+  Ingests a document from S3.
+  Request fields:
+  - document_name
+  - document_type (POLICY | RULE | REPORT | GUIDE)
+  - s3_uri
+
+  Processing pipeline:
+  1) Ensure OpenSearch index exists
+  2) Fetch bytes from S3
+  3) Extract text
+  4) Chunk text with overlap
+  5) Embed each chunk
+  6) Index chunk + vector into OpenSearch
+
+- GET /documents
+  Lists ingested document metadata records.
+
+- GET /documents/{document_id}
+  Returns one document metadata record.
+
+- POST /documents/clear-index
+  Clears all indexed chunks from OpenSearch and clears in-memory document metadata cache.
+  Response includes deleted chunk count and cleared metadata count.
+
+2.3 RAG Query API
+- POST /query
+  Request fields:
+  - question
+  - top_k (optional)
+
+  Response includes:
+  - answer
+  - sources
+  - answer_mode
+  - api_facts_used
+  - api_summary
+
+2.4 User APIs
+- POST /createuser
+  Creates a user with:
+  - first_name
+  - last_name
+  - age
+  - city
+  - role (seller | buyer | admin)
+
+- GET /getuser?user_id=<id>
+  Returns details for one user.
+
+- GET /getusers
+  Returns list of all users.
+
+2.5 Credit APIs
+- POST /createcredit
+  Creates a credit with:
+  - user_id
+  - credit_type (solar | wind | coal)
+  - price
+
+- GET /listings
+  Returns list of all credits.
+
+- GET /audit
+  Returns all credit operations (create, transfer).
+
+- POST /credit/transfer
+  Transfers credit ownership.
+  Request fields:
+  - credit_id
+  - source_user_id
+  - destination_user_id
+
+============================================================
+3. RAG + LLM TOOL-CALLING BEHAVIOR
+============================================================
+Current query flow:
+1) Embed user question
+2) Search similar chunks from OpenSearch
+3) Ask LLM planner whether API data is needed
+4) Execute approved tool calls on backend
+5) Build final prompt with:
+   - API_CONTEXT from tool results
+   - CONTEXT from retrieved chunks
+6) Generate final answer
+
+Important behavior:
+- API usage is model-decided (planner), not keyword hardcoded.
+- Backend enforces allowed tools via a central tool registry.
+- Unknown/unapproved planner tool names are ignored safely.
+
+============================================================
+4. LLM TOOL REGISTRY (AVAILABLE TOOLS)
+============================================================
+The LLM planner can choose these tools:
+- create_user
+- get_user
+- list_users
+- create_document
+- get_documents_summary
+- list_documents
+- get_document
+- create_credit
+- list_credits
+- get_credit_details
+- list_credit_audit
+- transfer_credit
+
+Each tool definition includes:
+- Purpose
+- When to use
+- Payload schema
+- Response schema
+- Example request/response
+
+============================================================
+5. DUPLICATE CHUNK HANDLING
+============================================================
+Duplicate chunk prevention is implemented in two layers:
+1) Idempotent ingestion:
+   - document_id is deterministic from S3 URI
+   - re-ingesting same S3 object updates same chunk IDs instead of creating new docs
+2) Retrieval dedup:
+   - OpenSearch hits are deduplicated by key
+   - repeated equivalent chunks are filtered in query results
+
+============================================================
+6. OPENSEARCH INDEX CONTENT
+============================================================
+Indexed chunk fields include:
+- chunk_id
+- document_id
+- document_name
+- document_type
+- chunk_index
+- text
+- s3_uri
+- indexed_at
+- embedding (knn_vector)
+
+OpenSearch is used for:
+- chunk indexing during ingestion
+- kNN retrieval during query
+- clearing all indexed data via clear-index endpoint
+
+============================================================
+7. BEDROCK INTEGRATION
+============================================================
+Bedrock is used for:
+1) Embeddings:
+   - Model configured by BEDROCK_EMBEDDING_MODEL_ID
+2) Planner:
+   - LLM decides whether API data is needed and which tools to call
+3) Final answer generation:
+   - LLM produces grounded answer from API + retrieval context
+
+If generation fails, the system returns an extractive fallback answer with top retrieved snippets.
+
+============================================================
+8. DATA LIFECYCLE NOTES
+============================================================
+Current storage model:
+- Users: in-memory
+- Credits: in-memory
+- Document metadata cache: in-memory
+- Chunks/vectors: OpenSearch persistent index
+
+Operational implication:
+- App restart resets in-memory entities (users, credits, metadata cache)
+- OpenSearch indexed chunks persist until manually cleared or index replaced
+
+============================================================
+9. TESTED CAPABILITIES
+============================================================
+Existing tests validate:
+- Query route contract
+- API-context planner/executor behavior
+- User endpoints
+- Credit endpoints
+- Document clear-index endpoint
+
+============================================================
+10. PRACTICAL RAG USAGE IDEAS
+============================================================
+This file can answer questions like:
+- What endpoints exist in GreenGrid Exchange?
+- How does /query work internally?
+- Which tools can the LLM call?
+- How are duplicate chunks prevented?
+- How does credit transfer work?
+- How to clear all indexed OpenSearch chunks?
+
+End of document.

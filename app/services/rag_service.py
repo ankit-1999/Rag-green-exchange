@@ -176,19 +176,8 @@ def _resolve_api_summary(question: str) -> Tuple[Optional[QueryApiSummary], bool
 
 
 def _build_fallback_answer(hits: List[Dict], generation_error: Exception) -> str:
-    """Return an extractive fallback answer when LLM generation is unavailable."""
-    snippets: List[str] = []
-    for idx, hit in enumerate(hits[:3], start=1):
-        text = (hit.get("text", "") or "").strip().replace("\n", " ")
-        if text:
-            snippets.append(f"{idx}. {text[:280]}")
-
-    fallback_context = "\n".join(snippets) if snippets else "No retrievable snippets available."
-    return (
-        "The generative model is currently unavailable, so this is an extractive fallback from retrieved context.\n"
-        f"Reason: {generation_error}\n\n"
-        f"Top retrieved snippets:\n{fallback_context}"
-    )
+    """Return a user-friendly fallback answer when generation is unavailable."""
+    return "I dont have the proper information about this, Pleas contact the Ankit for this 🙂"
 
 
 def answer_question(request: QueryRequest) -> QueryResponse:
@@ -208,10 +197,7 @@ def answer_question(request: QueryRequest) -> QueryResponse:
 
     if not hits:
         return QueryResponse(
-            answer=(
-                "I could not find relevant indexed context for this question yet. "
-                "Please upload more related documents and try again."
-            ),
+            answer="I dont have the proper information about this, Pleas contact the Ankit for this 🙂",
             source_count=0,
             sources=[],
             answer_mode="retrieval_only",
