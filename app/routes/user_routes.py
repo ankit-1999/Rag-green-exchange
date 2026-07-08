@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -13,12 +13,16 @@ router = APIRouter(tags=["Users"])
 
 @router.post(
     "/createuser",
-    response_model=UserResponse,
+    response_model=Union[UserResponse, List[UserResponse]],
     status_code=status.HTTP_201_CREATED,
     summary="Create a new user",
 )
-async def create_user(request: CreateUserRequest) -> UserResponse:
-    return user_service.create_user(request)
+async def create_user(
+    request: Union[CreateUserRequest, List[CreateUserRequest]],
+) -> Union[UserResponse, List[UserResponse]]:
+    requests = request if isinstance(request, list) else [request]
+    users = [user_service.create_user(item) for item in requests]
+    return users if isinstance(request, list) else users[0]
 
 
 @router.get(

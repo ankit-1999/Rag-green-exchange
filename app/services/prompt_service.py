@@ -1,5 +1,12 @@
 import json
-from typing import Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
 
 
 def _needs_elaborate_response(question: str) -> bool:
@@ -29,7 +36,7 @@ def build_rag_prompt(
 
     context_text = "\n\n".join(context_blocks)
     api_context_text = (
-        json.dumps(api_context, ensure_ascii=True, indent=2)
+        json.dumps(api_context, ensure_ascii=True, indent=2, default=_json_default)
         if api_context is not None
         else "None"
     )

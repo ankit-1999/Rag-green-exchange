@@ -53,3 +53,34 @@ def test_get_users_returns_list():
     payload = res.json()
     assert isinstance(payload, list)
     assert len(payload) >= 1
+
+
+def test_create_user_batch_payload_success():
+    client = TestClient(app)
+
+    res = client.post(
+        "/createuser",
+        json=[
+            {
+                "first_name": "BatchA",
+                "last_name": "One",
+                "age": 25,
+                "city": "Noida",
+                "role": "seller",
+            },
+            {
+                "first_name": "BatchB",
+                "last_name": "Two",
+                "age": 32,
+                "city": "Delhi",
+                "role": "buyer",
+            },
+        ],
+    )
+
+    assert res.status_code == 201
+    payload = res.json()
+    assert isinstance(payload, list)
+    assert len(payload) == 2
+    assert payload[0]["user_id"].startswith("user_")
+    assert payload[1]["user_id"].startswith("user_")

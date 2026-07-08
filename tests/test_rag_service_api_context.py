@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.schemas.query_schema import QueryRequest
+from app.services import prompt_service
 from app.services import rag_service
 
 
@@ -250,6 +251,20 @@ def test_answer_question_uses_api_data_when_no_vector_hits(monkeypatch):
     assert res.source_count == 0
     assert res.api_facts_used is True
     assert res.answer_mode == "retrieval_plus_api"
+
+
+def test_build_rag_prompt_serializes_datetime_in_api_context():
+    prompt = prompt_service.build_rag_prompt(
+        question="tell me something about EC-101",
+        retrieved_chunks=[],
+        api_context={
+            "credit": "EC-101",
+            "created_at": datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
+        },
+    )
+
+    assert "API_CONTEXT:" in prompt
+    assert "2026-07-01T12:30:00+00:00" in prompt
 
 
 def test_answer_question_executes_credit_audit_by_id_tool(monkeypatch):

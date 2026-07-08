@@ -156,3 +156,76 @@ def test_credit_audit_by_credit_id_endpoint():
     assert len(records) >= 2
     assert any(rec["operation"] == "create" for rec in records)
     assert any(rec["operation"] == "transfer" for rec in records)
+
+
+def test_createcredit_batch_payload_success():
+    client = TestClient(app)
+    owner_id = _create_user(client, "BatchOwner", role="seller")
+
+    res = client.post(
+        "/createcredit",
+        json=[
+            {
+                "user_id": owner_id,
+                "credit_type": "solar",
+                "price": 11.5,
+            },
+            {
+                "user_id": owner_id,
+                "credit_type": "wind",
+                "price": 13.0,
+            },
+        ],
+    )
+
+    assert res.status_code == 201
+    payload = res.json()
+    assert isinstance(payload, list)
+    assert len(payload) == 2
+    assert payload[0]["credit_id"].startswith("credit_")
+    assert payload[1]["credit_id"].startswith("credit_")
+
+
+def test_credit_transfer_batch_payload_success():
+    client = TestClient(app)
+    source_user_id = _create_user(client, "BatchSrc", role="seller")
+    destination_user_id = _create_user(client, "BatchDst", role="buyer")
+
+    first_credit = client.post(
+        "/createcredit",
+        json={
+            "user_id": source_user_id,
+            "credit_type": "solar",
+            "price": 50.0,
+        },
+    ).json()
+    second_credit = client.post(
+        "/createcredit",
+        json={
+            "user_id": source_user_id,
+            "credit_type": "wind",
+            "price": 60.0,
+        },
+    ).json()
+
+    res = client.post(
+        "/credit/transfer",
+        json=[
+            {
+                "credit_id": first_credit["credit_id"],
+                "source_user_id": source_user_id,
+                "destination_user_id": destination_user_id,
+            },
+            {
+                "credit_id": second_credit["credit_id"],
+                "source_user_id": source_user_id,
+                "destination_user_id": destination_user_id,
+            },
+        ],
+    )
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert isinstance(payload, list)
+    assert len(payload) == 2
+    assert all(item["user_id"] == destination_user_id for item in payload)

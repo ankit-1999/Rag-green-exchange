@@ -11,7 +11,7 @@ GET  /documents/{document_id} Get metadata for a specific document
 """
 
 import logging
-from typing import List
+from typing import List, Union
 from fastapi import APIRouter, HTTPException, status
 
 from app.schemas.document_schema import (
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 @router.post(
     "/upload",
-    response_model=DocumentUploadResponse,
+    response_model=Union[DocumentUploadResponse, List[DocumentUploadResponse]],
     status_code=status.HTTP_201_CREATED,
     summary="Ingest a document from S3",
     description=(
@@ -37,15 +37,23 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
         "generates embeddings via Bedrock Titan, and indexes into OpenSearch."
     ),
 )
-async def upload_document(request: DocumentUploadRequest) -> DocumentUploadResponse:
+async def upload_document(
+    request: Union[DocumentUploadRequest, List[DocumentUploadRequest]],
+) -> Union[DocumentUploadResponse, List[DocumentUploadResponse]]:
     try:
-        result = document_service.ingest_document(request)
-        if result.status == "failed":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=result.message,
-            )
-        return result
+        requests = request if isinstance(request, list) else [request]
+        results: List[DocumentUploadResponse] = []
+
+        for item in requests:
+            result = document_service.ingest_document(item)
+            if result.status == "failed":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=result.message,
+                )
+            results.append(result)
+
+        return results if isinstance(request, list) else results[0]
     except FileNotFoundError as exc:
         logger.warning("Document not found in S3: %s", exc)
         raise HTTPException(
