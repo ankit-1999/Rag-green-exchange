@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -34,16 +33,11 @@ class QueryApiSummary(BaseModel):
 
     context_type: str = Field(
         default="documents",
-        description="documents | credit",
+        description="documents",
     )
     total_documents: Optional[int] = None
     by_type: Dict[str, int] = Field(default_factory=dict)
     sample_document_names: List[str] = Field(default_factory=list)
-    credit_reference: Optional[str] = None
-    owner_user_id: Optional[str] = None
-    credit_type: Optional[str] = None
-    credit_price: Optional[float] = None
-    credit_created_at: Optional[datetime] = None
     planner_reason: Optional[str] = None
     tool_results: List[Dict[str, Any]] = Field(default_factory=list)
 
