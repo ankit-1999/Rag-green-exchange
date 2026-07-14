@@ -150,7 +150,7 @@ _TOOL_CATALOG: List[Dict] = [
     {
         "name": "get_active_listings",
         "http_method": "GET",
-        "endpoint": "/api/v1/public/listings/active",
+        "endpoint": "/api/v1/listings/active",
         "purpose": (
             "Retrieve listings that are currently active, available, and "
             "eligible for purchase."

@@ -345,7 +345,7 @@ class Settings:
 
     MARKETPLACE_ACTIVE_LISTINGS_PATH: str = os.getenv(
         "MARKETPLACE_ACTIVE_LISTINGS_PATH",
-        "/api/v1/public/listings/active",
+        "/api/v1/listings/active",
     )
 
     MARKETPLACE_ALL_PURCHASES_PATH: str = os.getenv(
