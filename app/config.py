@@ -12,9 +12,10 @@ No static AWS credentials or marketplace secrets are stored here.
 """
 
 import os
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv # type: ignore
 
 load_dotenv()
 
@@ -38,8 +39,8 @@ def _get_bool(name: str, default: bool) -> bool:
 def _get_int(
     name: str,
     default: int,
-    minimum: int | None = None,
-    maximum: int | None = None,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
 ) -> int:
     """Read and validate an integer environment variable."""
     raw_value = os.getenv(name, str(default))
@@ -67,8 +68,8 @@ def _get_int(
 def _get_float(
     name: str,
     default: float,
-    minimum: float | None = None,
-    maximum: float | None = None,
+    minimum: Optional[float] = None,
+    maximum: Optional[float] = None,
 ) -> float:
     """Read and validate a floating-point environment variable."""
     raw_value = os.getenv(name, str(default))
@@ -430,13 +431,13 @@ class Settings:
     # Supported Marketplace Values
     # -----------------------------------------------------------------------
 
-    SUPPORTED_ENERGY_SOURCES: tuple[str, ...] = (
+    SUPPORTED_ENERGY_SOURCES: Tuple[str, ...] = (
         "SOLAR",
         "WIND",
         "HYDRO",
     )
 
-    SUPPORTED_LISTING_STATUSES: tuple[str, ...] = (
+    SUPPORTED_LISTING_STATUSES: Tuple[str, ...] = (
         "active",
         "sold",
         "expired",
@@ -444,7 +445,7 @@ class Settings:
     )
 
     # Confirm these values against the actual backend purchase-status enum.
-    SUPPORTED_PURCHASE_STATUSES: tuple[str, ...] = (
+    SUPPORTED_PURCHASE_STATUSES: Tuple[str, ...] = (
         "active",
         "pending",
         "completed",
