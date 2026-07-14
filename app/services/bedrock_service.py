@@ -140,41 +140,481 @@ def _date_context(today: Optional[date] = None) -> Dict[str, str]:
     }
 
 
-def _planner_prompt(question: str, catalog: str, dates: Mapping[str, str]) -> str:
-    return f"""You are the read-only API planner for GreenGrid Exchange.
-Supported sources: SOLAR, WIND, HYDRO.
-Select only tools in TOOL_CATALOG. Never select write, authenticated-user, or blockchain operations.
+def _planner_prompt(
+    question: str,
+    catalog: str,
+    dates: Mapping[str, str],
+) -> str:
+    """
+    Build the marketplace-aware read-only API planner prompt.
 
-Routing:
-- get_active_listings: current availability, active supply, supply mix, candidates.
-- get_all_listings: historical listed supply, stability, ratios, forecast input.
-- get_all_purchases: completed demand, realized prices, volatility, forecast input.
+    Important:
+    The planner determines the analytical intent and extracts filters.
+    Python subsequently enforces the mandatory tool combination for the intent.
+    """
 
-Intent rules:
-- demand_supply_ratio and market_balance require listings + purchases.
-- demand_prediction requires listings + purchases.
-- price_prediction requires purchases + active listings.
-- shortage_prediction requires listings + purchases + active listings.
-- seller_recommendation requires listings + purchases + active listings.
-- buyer_recommendation requires purchases + active listings.
-- Predictions without an explicit history use the previous 180 days.
-- Next month is the forecast period, not the history filter.
-- Use status=completed for realized demand.
-- Do not filter one source when comparing all sources.
-- Normalize all hydro wording to HYDRO.
-- Return only JSON.
+    return f"""
+You are the read-only marketplace API planner for GreenGrid Exchange.
 
-DATE_CONTEXT:
-{json.dumps(dict(dates), indent=2)}
+Your only responsibility is to:
 
-TOOL_CATALOG:
-{catalog}
+1. Identify the user's intent.
+2. Decide whether live marketplace data is mandatory.
+3. Select the required read-only GET tools.
+4. Extract source, location, date, status, price, quantity, and sorting filters.
+5. Return one valid JSON object.
 
-Schema:
-{{"requires_api_data":true,"reason":"short reason","intent":"allowed intent","is_prediction":false,"is_recommendation":false,"historical_period":{{"from":null,"to":null}},"forecast_period":{{"from":null,"to":null}},"group_by":[],"metrics":[],"missing_parameters":[],"tool_calls":[{{"tool":"tool name","arguments":{{}}}}]}}
+You do not answer the user's question.
+
+SUPPORTED RENEWABLE SOURCES:
+
+- SOLAR
+- WIND
+- HYDRO
+
+Normalize all source language as follows:
+
+- solar, solar energy, solar power -> SOLAR
+- wind, wind energy, wind power -> WIND
+- hydro, hydropower, hydro energy -> HYDRO
+
+Never output SMALL_HYDRO.
+
+AVAILABLE DATA SOURCES:
+
+1. get_active_listings
+
+Use for:
+
+- Current available credits
+- Current active supply
+- Active marketplace supply percentage
+- Active listings by location
+- Lowest or highest-priced active listings
+- Current marketplace inventory
+- Current buyer recommendation candidates
+- Active inventory used in shortage prediction
+
+2. get_all_listings
+
+Use for:
+
+- Historical listed supply
+- Listings created during a historical period
+- Historical supply trends
+- Listing-status analysis
+- Asking-price history
+- Supply stability
+- Demand-to-supply ratio
+- Market-balance analysis
+- Prediction inputs
+
+3. get_all_purchases
+
+Use for:
+
+- Realized marketplace demand
+- Completed purchase volume
+- Historical demand trends
+- Realized selling prices
+- Average selling price
+- Price volatility
+- Demand prediction
+- Price prediction
+- Shortage prediction
+- Recommendation inputs
+
+LIVE DATA ENFORCEMENT RULES:
+
+The following question types always require live marketplace API data:
+
+- Current supply
+- Current availability
+- Marketplace percentages
+- Source comparison
+- Location comparison
+- Historical demand
+- Historical supply
+- Average marketplace price
+- Average selling price
+- Price comparison
+- Demand-to-supply ratio
+- Shortage or surplus analysis
+- Supply stability
+- Price volatility
+- Demand prediction
+- Supply prediction
+- Price prediction
+- Shortage prediction
+- Buyer recommendation
+- Seller recommendation
+- Questions asking what the user should list or buy
+- Questions asking which source, location, credit, or listing is best
+
+For those questions:
+
+- requires_api_data must be true.
+- requires_live_data must be true.
+- Never return an empty tool_calls list.
+- Never allow RAG documents to substitute for marketplace API data.
+- Static examples in documents are not live marketplace facts.
+- Sample credits in documents must not be used for calculations.
+- If live APIs later fail or return no usable records, the final answer must
+  state that the result could not be calculated from live marketplace data.
+
+Conceptual questions may use RAG without marketplace APIs.
+
+Examples of conceptual questions:
+
+- What is an electricity credit?
+- How does GreenGrid Exchange work?
+- What does demand-to-supply ratio mean?
+- How is price volatility calculated?
+- What are the supported renewable sources?
+- What is the difference between active and sold listings?
+
+MANDATORY INTENT-TO-TOOL RULES:
+
+current_supply:
+
+- Must use get_active_listings.
+
+supply_mix:
+
+- Must use get_active_listings.
+- Do not apply an energy_source filter because all sources must be compared.
+
+historical_supply:
+
+- Must use get_all_listings.
+
+historical_demand:
+
+- Must use get_all_purchases.
+- Use status=completed.
+
+average_selling_price:
+
+- Must use get_all_purchases.
+- Use status=completed.
+
+demand_supply_ratio:
+
+- Must use get_all_listings.
+- Must use get_all_purchases.
+- Both tools must use the same period and location/source scope.
+- Purchases must use status=completed.
+
+market_balance:
+
+- Must use get_all_listings.
+- Must use get_all_purchases.
+- Both tools must use the same period and location/source scope.
+- Purchases must use status=completed.
+
+supply_stability:
+
+- Must use get_all_listings.
+- Prefer at least 90 to 180 days of historical data.
+
+price_volatility:
+
+- Must use get_all_purchases.
+- Use status=completed.
+- Prefer at least 90 to 180 days of historical data.
+
+supply_by_location:
+
+- Must use get_active_listings.
+- Apply energy_source only when specified.
+- Group results by location.
+
+demand_prediction:
+
+- Must use get_all_listings.
+- Must use get_all_purchases.
+- Purchases must use status=completed.
+- Use at least the previous 180 days as history unless the user explicitly
+  supplies a longer valid period.
+- Do not apply an energy_source filter when predicting the highest-demand source
+  across Solar, Wind, and Hydro.
+
+price_prediction:
+
+- Must use get_all_purchases.
+- Must use get_active_listings.
+- Purchases must use status=completed.
+- Use at least the previous 180 days as historical input.
+
+shortage_prediction:
+
+- Must use get_all_listings.
+- Must use get_all_purchases.
+- Must use get_active_listings.
+- Apply the same source and location to all three tools.
+- Purchases must use status=completed.
+- Use at least the previous 180 days as historical input.
+
+seller_recommendation:
+
+- Must use get_all_listings.
+- Must use get_all_purchases.
+- Must use get_active_listings.
+- Purchases must use status=completed.
+- Use the previous 28 days as supporting history for a question about
+  listing credits this week.
+- Do not apply a single source filter when comparing Solar and Wind.
+
+buyer_recommendation:
+
+- Must use get_active_listings.
+- Must use get_all_purchases.
+- Use active listings as the recommendation candidates.
+- Use completed purchases for historical demand.
+
+DATE RULES:
+
+Use the supplied DATE_CONTEXT.
+
+- "today" -> DATE_CONTEXT.today
+- "this week" -> DATE_CONTEXT.this_week_start through
+  DATE_CONTEXT.this_week_end
+- "last week" -> DATE_CONTEXT.last_week_start through
+  DATE_CONTEXT.last_week_end
+- "this month" -> DATE_CONTEXT.this_month_start through
+  DATE_CONTEXT.this_month_to_date_end
+- "last month" -> DATE_CONTEXT.last_month_start through
+  DATE_CONTEXT.last_month_end
+- "next month" -> DATE_CONTEXT.next_month_start through
+  DATE_CONTEXT.next_month_end
+- Predictions without an explicit historical period must use
+  DATE_CONTEXT.rolling_180_days_start through DATE_CONTEXT.today.
+- Seller recommendations for "this week" must use
+  DATE_CONTEXT.rolling_28_days_start through DATE_CONTEXT.today.
+
+The next-month date range is the forecast period.
+
+Do not use the next-month dates as historical API filters.
+
+If the user says "during the selected period" but does not supply a date range
+or relative period:
+
+- Add "date_range" to missing_parameters.
+- Do not invent a date range.
+
+FILTER RULES:
+
+- Use created_from and created_to only with listing tools.
+- Use completed_from and completed_to only with purchase tools.
+- Use status=completed for realized demand and realized-price analysis.
+- Use skip=0.
+- Use limit=100.
+- Add location only if the user specifies a location.
+- Add energy_source only if the user asks about one specific source.
+- Do not apply one source filter when comparing Solar, Wind, and Hydro.
+- Do not make separate API calls per source when one unfiltered call can return
+  all source records.
+- Use only filters defined in the selected tool's payload_schema.
+- Never invent unsupported filters.
+
+QUESTION ROUTING EXAMPLES:
 
 Question:
-{question}"""
+Which renewable source currently has the highest available supply?
+
+Required result:
+
+- intent=current_supply
+- requires_live_data=true
+- tool=get_active_listings
+- group_by=energy_source
+- metric=energy_kwh
+
+Question:
+What percentage of active marketplace supply comes from Solar, Wind, and Hydro?
+
+Required result:
+
+- intent=supply_mix
+- requires_live_data=true
+- tool=get_active_listings
+- no energy_source filter
+- group_by=energy_source
+- metrics=energy_kwh
+
+Question:
+Compare demand for Solar, Wind, and Hydro during last month.
+
+Required result:
+
+- intent=historical_demand
+- requires_live_data=true
+- tool=get_all_purchases
+- status=completed
+- completed_from=last_month_start
+- completed_to=last_month_end
+- no energy_source filter
+
+Question:
+Which renewable source had the highest average selling price last month?
+
+Required result:
+
+- intent=average_selling_price
+- requires_live_data=true
+- tool=get_all_purchases
+- status=completed
+- completed_from=last_month_start
+- completed_to=last_month_end
+
+Question:
+Predict which renewable source will have the highest demand next month.
+
+Required result:
+
+- intent=demand_prediction
+- requires_live_data=true
+- tools=get_all_listings and get_all_purchases
+- historical filters=previous 180 days through today
+- forecast period=next month
+- no energy_source filter
+- group_by=energy_source and week
+
+Question:
+Is Noida likely to face a Solar-credit shortage next month?
+
+Required result:
+
+- intent=shortage_prediction
+- requires_live_data=true
+- tools=get_all_listings, get_all_purchases, get_active_listings
+- energy_source=SOLAR on every tool
+- location=Noida on every tool
+- historical filters=previous 180 days through today
+- forecast period=next month
+
+Question:
+Which location has the greatest Wind-credit supply?
+
+Required result:
+
+- intent=supply_by_location
+- requires_live_data=true
+- tool=get_active_listings
+- energy_source=WIND
+- group_by=location
+
+Question:
+Should I list Solar or Wind credits this week?
+
+Required result:
+
+- intent=seller_recommendation
+- requires_live_data=true
+- tools=get_all_listings, get_all_purchases, get_active_listings
+- historical filters=previous 28 days through today
+- no single energy_source filter
+- group_by=energy_source and week
+
+SAFETY RULES:
+
+- Only select tools present in TOOL_CATALOG.
+- Never select POST, PATCH, PUT, or DELETE operations.
+- Never select document-ingestion tools.
+- Never select authenticated-user tools.
+- Never select blockchain tools.
+- Never answer the user's question.
+- Never calculate predictions in the planner.
+- Never invent marketplace facts.
+- Return only valid JSON.
+- Do not return Markdown or code fences.
+
+ALLOWED INTENTS:
+
+- none
+- current_supply
+- supply_mix
+- historical_supply
+- historical_demand
+- average_selling_price
+- demand_supply_ratio
+- market_balance
+- supply_stability
+- price_volatility
+- supply_by_location
+- demand_prediction
+- price_prediction
+- shortage_prediction
+- seller_recommendation
+- buyer_recommendation
+
+DATE_CONTEXT:
+
+{json.dumps(dict(dates), ensure_ascii=True, indent=2)}
+
+TOOL_CATALOG:
+
+{catalog}
+
+OUTPUT JSON SCHEMA:
+
+{{
+  "requires_api_data": true,
+  "requires_live_data": true,
+  "reason": "Short explanation of why live API data is required.",
+  "intent": "one allowed intent",
+  "is_prediction": false,
+  "is_recommendation": false,
+  "historical_period": {{
+    "from": "YYYY-MM-DD or null",
+    "to": "YYYY-MM-DD or null"
+  }},
+  "forecast_period": {{
+    "from": "YYYY-MM-DD or null",
+    "to": "YYYY-MM-DD or null"
+  }},
+  "group_by": [
+    "energy_source"
+  ],
+  "metrics": [
+    "energy_kwh"
+  ],
+  "missing_parameters": [],
+  "tool_calls": [
+    {{
+      "tool": "tool_name_from_catalog",
+      "arguments": {{}}
+    }}
+  ]
+}}
+
+For conceptual questions that do not require live data:
+
+{{
+  "requires_api_data": false,
+  "requires_live_data": false,
+  "reason": "The question can be answered using project documentation.",
+  "intent": "none",
+  "is_prediction": false,
+  "is_recommendation": false,
+  "historical_period": {{
+    "from": null,
+    "to": null
+  }},
+  "forecast_period": {{
+    "from": null,
+    "to": null
+  }},
+  "group_by": [],
+  "metrics": [],
+  "missing_parameters": [],
+  "tool_calls": []
+}}
+
+USER QUESTION:
+
+{question}
+""".strip()
 
 
 def plan_api_calls(question: str) -> Dict[str, Any]:
@@ -229,21 +669,78 @@ def _parse_json(text: str) -> Dict[str, Any]:
 
 
 def _normalize_plan(raw: Mapping[str, Any]) -> Dict[str, Any]:
-    intent = str(raw.get("intent", "none") or "none").strip().lower()
+    intent = str(
+        raw.get("intent", "none") or "none"
+    ).strip().lower()
+
     if intent not in INTENTS:
         intent = "none"
-    calls = _normalize_calls(raw.get("tool_calls"))
+
+    calls = _normalize_calls(
+        raw.get("tool_calls")
+    )
+
+    requires_api_data = (
+        bool(calls)
+        or bool(raw.get("requires_api_data", False))
+    )
+
+    requires_live_data = bool(
+        raw.get("requires_live_data", False)
+    )
+
+    if intent != "none" and intent in {
+        "current_supply",
+        "supply_mix",
+        "historical_supply",
+        "historical_demand",
+        "average_selling_price",
+        "demand_supply_ratio",
+        "market_balance",
+        "supply_stability",
+        "price_volatility",
+        "supply_by_location",
+        "demand_prediction",
+        "price_prediction",
+        "shortage_prediction",
+        "seller_recommendation",
+        "buyer_recommendation",
+    }:
+        requires_api_data = True
+        requires_live_data = True
+
     return {
-        "requires_api_data": bool(calls) or bool(raw.get("requires_api_data", False)),
-        "reason": str(raw.get("reason", "") or "").strip(),
+        "requires_api_data": requires_api_data,
+        "requires_live_data": requires_live_data,
+        "reason": str(
+            raw.get("reason", "") or ""
+        ).strip(),
         "intent": intent,
-        "is_prediction": bool(raw.get("is_prediction", False)) or intent in PREDICTION_INTENTS,
-        "is_recommendation": bool(raw.get("is_recommendation", False)) or intent in RECOMMENDATION_INTENTS,
-        "historical_period": _period(raw.get("historical_period")),
-        "forecast_period": _period(raw.get("forecast_period")),
-        "group_by": _string_list(raw.get("group_by"), GROUPS),
-        "metrics": _string_list(raw.get("metrics"), METRICS),
-        "missing_parameters": _missing(raw.get("missing_parameters")),
+        "is_prediction": (
+            bool(raw.get("is_prediction", False))
+            or intent in PREDICTION_INTENTS
+        ),
+        "is_recommendation": (
+            bool(raw.get("is_recommendation", False))
+            or intent in RECOMMENDATION_INTENTS
+        ),
+        "historical_period": _period(
+            raw.get("historical_period")
+        ),
+        "forecast_period": _period(
+            raw.get("forecast_period")
+        ),
+        "group_by": _string_list(
+            raw.get("group_by"),
+            GROUPS,
+        ),
+        "metrics": _string_list(
+            raw.get("metrics"),
+            METRICS,
+        ),
+        "missing_parameters": _missing(
+            raw.get("missing_parameters")
+        ),
         "tool_calls": calls,
     }
 
@@ -442,9 +939,22 @@ def _merge(existing: Any, required: Sequence[str]) -> List[str]:
 
 def _empty_plan(reason: str) -> Dict[str, Any]:
     return {
-        "requires_api_data": False, "reason": reason, "intent": "none",
-        "is_prediction": False, "is_recommendation": False,
-        "historical_period": {"from": None, "to": None},
-        "forecast_period": {"from": None, "to": None},
-        "group_by": [], "metrics": [], "missing_parameters": [], "tool_calls": [],
+        "requires_api_data": False,
+        "requires_live_data": False,
+        "reason": reason,
+        "intent": "none",
+        "is_prediction": False,
+        "is_recommendation": False,
+        "historical_period": {
+            "from": None,
+            "to": None,
+        },
+        "forecast_period": {
+            "from": None,
+            "to": None,
+        },
+        "group_by": [],
+        "metrics": [],
+        "missing_parameters": [],
+        "tool_calls": [],
     }
