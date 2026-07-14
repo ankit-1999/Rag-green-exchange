@@ -1,17 +1,41 @@
+"""
+rag_service.py
+--------------
+
+End-to-end orchestration for GreenGrid Exchange RAG, marketplace analytics,
+prediction, and recommendation answers.
+
+Flow:
+1. Embed the user question and retrieve relevant RAG chunks.
+2. Ask Nova Micro to create a validated read-only marketplace tool plan.
+3. Execute approved public GET tools through marketplace_api_service.
+4. Calculate deterministic analytics through analytics_service.
+5. Build a compact grounded prompt.
+6. Generate the final answer with Nova Micro.
+7. Return RAG citations and marketplace execution metadata.
+"""
+
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from pydantic import ValidationError
 
 from app.config import settings
-from app.schemas.document_schema import DocumentUploadRequest
 from app.schemas.query_schema import (
     QueryApiSummary,
+    QueryPeriod, # type: ignore
     QueryRequest,
     QueryResponse,
     QuerySource,
+    QueryToolResult, # type: ignore
 )
 from app.services import (
+    analytics_service,
     bedrock_service,
-    document_service,
+    marketplace_api_service,
     opensearch_service,
     prompt_service,
     tool_registry,
@@ -19,158 +43,423 @@ from app.services import (
 
 logger = logging.getLogger(__name__)
 
+MAX_TOOL_CALLS = 4
 
-def _execute_tool_call(tool_name: str, arguments: Dict) -> Optional[Dict]:
-    """Execute one approved tool call and return normalized result payload."""
+
+# ---------------------------------------------------------------------------
+# Marketplace tool execution
+# ---------------------------------------------------------------------------
+
+
+def _execute_tool_call(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute one approved public marketplace GET tool."""
     if tool_registry.get_tool_by_name(tool_name) is None:
-        logger.info("Skipping tool not in registry: %s", tool_name)
-        return None
+        raise ValueError(f"Tool is not registered: {tool_name}")
 
-    if tool_name == "create_document":
-        request = DocumentUploadRequest(**arguments)
-        response = document_service.ingest_document(request)
-        return {"tool": tool_name, "data": response.model_dump()}
+    if tool_name not in {
+        "get_all_listings",
+        "get_active_listings",
+        "get_all_purchases",
+    }:
+        raise ValueError(f"Tool has no read-only marketplace executor: {tool_name}")
 
-    if tool_name == "get_documents_summary":
-        data = document_service.get_documents_summary()
-        return {"tool": tool_name, "data": data}
-
-    if tool_name == "list_documents":
-        limit = arguments.get("limit")
-        docs = document_service.list_documents()
-        if isinstance(limit, int) and limit >= 0:
-            docs = docs[:limit]
-        return {
-            "tool": tool_name,
-            "data": {"documents": [doc.model_dump() for doc in docs]},
-        }
-
-    if tool_name == "get_document":
-        document_id = str(arguments.get("document_id", "")).strip()
-        if not document_id:
-            return None
-        doc = document_service.get_document_metadata(document_id)
-        return {
-            "tool": tool_name,
-            "data": {"document": doc.model_dump() if doc else None},
-        }
-
-    logger.info("Skipping unsupported tool request (no executor): %s", tool_name)
-    return None
+    return marketplace_api_service.execute_tool_call(
+        tool_name=tool_name,
+        arguments=arguments,
+    )
 
 
-def _resolve_api_summary(question: str) -> Tuple[Optional[QueryApiSummary], bool]:
-    """Use LLM planner to decide and execute approved backend API tools."""
-    plan = bedrock_service.plan_api_calls(question)
-    if not plan.get("requires_api_data", False):
-        return None, False
+def _execute_plan(plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Execute validated planner calls without failing the entire query."""
+    raw_calls = plan.get("tool_calls", [])
+    if not isinstance(raw_calls, list):
+        return []
 
-    tool_calls = plan.get("tool_calls", [])
-    if not isinstance(tool_calls, list) or not tool_calls:
-        return None, False
+    results: List[Dict[str, Any]] = []
 
-    tool_results: List[Dict] = []
-    for tool_call in tool_calls[:4]:
-        if not isinstance(tool_call, dict):
+    for call in raw_calls[:MAX_TOOL_CALLS]:
+        if not isinstance(call, Mapping):
             continue
-        tool_name = str(tool_call.get("tool", "")).strip()
-        arguments = tool_call.get("arguments", {})
+
+        tool_name = str(call.get("tool", "") or "").strip()
+        arguments = call.get("arguments", {})
         if not isinstance(arguments, dict):
             arguments = {}
+
         try:
             result = _execute_tool_call(tool_name, arguments)
-            if result is not None:
-                tool_results.append(result)
+            results.append(result)
         except Exception as exc:
-            logger.warning("Tool execution failed for %s: %s", tool_name, exc)
+            logger.exception("Tool execution failed before API result creation: %s", tool_name)
+            results.append(
+                {
+                    "tool": tool_name or "unknown",
+                    "data": {
+                        "records": [],
+                        "sample_records": [],
+                        "response_metadata": {},
+                    },
+                    "arguments": arguments,
+                    "record_count": 0,
+                    "pages_fetched": 0,
+                    "endpoint": None,
+                    "execution_status": "failed",
+                    "error": _safe_error(exc),
+                }
+            )
 
+    return results
+
+
+# ---------------------------------------------------------------------------
+# API and analytics summary construction
+# ---------------------------------------------------------------------------
+
+
+def _resolve_api_summary(
+    question: str,
+) -> Tuple[Optional[QueryApiSummary], bool, Dict[str, Any]]:
+    """
+    Plan, execute, and analyze marketplace tools.
+
+    Returns:
+        (summary, api_facts_used, plan)
+    """
+    plan = bedrock_service.plan_api_calls(question)
+
+    if not plan.get("requires_api_data", False):
+        return None, False, plan
+
+    tool_results = _execute_plan(plan)
     if not tool_results:
-        return None, False
+        return None, False, plan
 
-    summary = QueryApiSummary(
-        context_type="mixed" if len(tool_results) > 1 else tool_results[0]["tool"],
-        planner_reason=str(plan.get("reason", "")),
+    analysis = analytics_service.analyze_plan(
+        plan=plan,
         tool_results=tool_results,
     )
 
-    for result in tool_results:
-        if result["tool"] == "get_documents_summary":
-            data = result["data"]
-            summary.total_documents = data.get("total_documents")
-            summary.by_type = data.get("by_type", {})
-            summary.sample_document_names = data.get("sample_document_names", [])
+    successful_or_empty = any(
+        result.get("execution_status") in {"success", "partial", "empty"}
+        for result in tool_results
+    )
+    api_facts_used = any(
+        result.get("execution_status") in {"success", "partial"}
+        and int(result.get("record_count", 0) or 0) > 0
+        for result in tool_results
+    )
 
-    return summary, True
+    context_type = _context_type(plan)
+    compact_tool_results = [
+        _to_query_tool_result(result)
+        for result in tool_results
+    ]
+
+    filters_used = [
+        {
+            "tool": result.get("tool"),
+            "arguments": result.get("arguments", {}),
+        }
+        for result in tool_results
+    ]
+
+    summary = QueryApiSummary(
+        context_type=context_type,
+        planner_reason=str(plan.get("reason", "") or ""),
+        intent=str(analysis.get("intent", plan.get("intent", "none"))), # type: ignore
+        is_prediction=bool(plan.get("is_prediction", False)), # type: ignore
+        is_recommendation=bool(plan.get("is_recommendation", False)), # type: ignore
+        historical_period=_to_query_period(plan.get("historical_period")), # type: ignore
+        forecast_period=_to_query_period(plan.get("forecast_period")), # type: ignore
+        group_by=list(plan.get("group_by", []) or []), # type: ignore
+        metrics=list(plan.get("metrics", []) or []), # type: ignore
+        filters_used=filters_used, # type: ignore
+        records_analyzed=dict(analysis.get("records_analyzed", {}) or {}), # type: ignore
+        analytics_result=dict(analysis.get("analytics_result", {}) or {}), # type: ignore
+        prediction_result=analysis.get("prediction_result"), # type: ignore
+        recommendation_result=analysis.get("recommendation_result"), # type: ignore
+        confidence=analysis.get("confidence"), # type: ignore
+        limitations=list(analysis.get("limitations", []) or []), # type: ignore
+        missing_parameters=list(plan.get("missing_parameters", []) or []), # type: ignore
+        calculation_method=analysis.get("calculation_method"), # type: ignore
+        data_as_of=datetime.now(timezone.utc).isoformat(), # type: ignore
+        tool_results=compact_tool_results, # type: ignore
+    )
+
+    # Empty API responses are still useful operational context, but they do not
+    # count as API facts. This lets the final answer say that no records matched.
+    if successful_or_empty and not api_facts_used:
+        summary.limitations = _append_unique( # type: ignore
+            summary.limitations, # type: ignore
+            "No matching marketplace records were available for the requested scope.",
+        )
+
+    return summary, api_facts_used, plan
 
 
-def _build_fallback_answer(hits: List[Dict], generation_error: Exception) -> str:
-    """Return a user-friendly fallback answer when generation is unavailable."""
-    return "I'm sorry, I don't have that information. Please get in touch with Ankit, who will be happy to help 🙂"
+def _to_query_tool_result(result: Mapping[str, Any]) -> QueryToolResult:
+    """Convert a raw tool result while excluding full record arrays."""
+    raw_data = result.get("data", {})
+    compact_data: Dict[str, Any] = {
+        "sample_records": [],
+        "response_metadata": {},
+    }
+
+    if isinstance(raw_data, Mapping):
+        samples = raw_data.get("sample_records", [])
+        if isinstance(samples, list):
+            compact_data["sample_records"] = samples[: settings.ANALYTICS_LLM_SAMPLE_RECORDS]
+
+        metadata = raw_data.get("response_metadata", {})
+        if isinstance(metadata, Mapping):
+            compact_data["response_metadata"] = dict(metadata)
+
+    return QueryToolResult(
+        tool=str(result.get("tool", "unknown")),
+        data=compact_data,
+        arguments=dict(result.get("arguments", {}) or {}),
+        record_count=int(result.get("record_count", 0) or 0),
+        pages_fetched=int(result.get("pages_fetched", 0) or 0),
+        endpoint=result.get("endpoint"),
+        execution_status=str(result.get("execution_status", "failed")),
+        error=result.get("error"),
+    )
+
+
+def _to_query_period(value: Any) -> Optional[QueryPeriod]:
+    """Convert planner period dictionaries to the response model."""
+    if not isinstance(value, Mapping):
+        return None
+
+    from_value = value.get("from")
+    to_value = value.get("to")
+    if not from_value and not to_value:
+        return None
+
+    return QueryPeriod(
+        from_date=str(from_value) if from_value else None,
+        to_date=str(to_value) if to_value else None,
+    )
+
+
+def _context_type(plan: Mapping[str, Any]) -> str:
+    if plan.get("is_prediction", False):
+        return "prediction"
+    if plan.get("is_recommendation", False):
+        return "recommendation"
+
+    tool_count = len(plan.get("tool_calls", []) or [])
+    intent = str(plan.get("intent", "none") or "none")
+    if tool_count > 1:
+        return "mixed"
+    if intent not in {"none", "current_supply", "supply_mix"}:
+        return "analytics"
+    return "marketplace"
+
+
+# ---------------------------------------------------------------------------
+# RAG retrieval and source conversion
+# ---------------------------------------------------------------------------
+
+
+def _retrieve_chunks(question: str, top_k: int) -> List[Dict[str, Any]]:
+    """Retrieve RAG chunks; allow API-backed answers if retrieval fails."""
+    try:
+        embedding = bedrock_service.embed_text(question)
+        return opensearch_service.search_similar_chunks(
+            embedding,
+            top_k=top_k,
+        )
+    except Exception as exc:
+        logger.warning("RAG retrieval unavailable: %s", exc)
+        return []
+
+
+def _build_sources(hits: Sequence[Mapping[str, Any]]) -> List[QuerySource]:
+    sources: List[QuerySource] = []
+
+    for hit in hits:
+        try:
+            sources.append(
+                QuerySource(
+                    chunk_id=str(hit.get("chunk_id", "") or ""),
+                    document_id=str(hit.get("document_id", "") or ""),
+                    document_name=str(hit.get("document_name", "") or ""),
+                    document_type=str(hit.get("document_type", "") or ""),
+                    chunk_index=int(hit.get("chunk_index", 0) or 0),
+                    s3_uri=str(hit.get("s3_uri", "") or ""),
+                    score=float(hit.get("score", 0.0) or 0.0),
+                    snippet=str(hit.get("text", "") or "")[:280].replace("\n", " "),
+                )
+            )
+        except (TypeError, ValueError, ValidationError) as exc:
+            logger.warning("Skipping malformed RAG source: %s", exc)
+
+    return sources
+
+
+# ---------------------------------------------------------------------------
+# Answer and fallback handling
+# ---------------------------------------------------------------------------
+
+
+def _build_fallback_answer(
+    api_summary: Optional[QueryApiSummary],
+    hits: Sequence[Mapping[str, Any]],
+    generation_error: Exception,
+) -> str:
+    """Return a useful fallback when final LLM generation is unavailable."""
+    logger.warning("Building fallback answer after generation failure: %s", generation_error)
+
+    if api_summary is not None: # type: ignore
+        if api_summary.missing_parameters: # type: ignore
+            missing = ", ".join(api_summary.missing_parameters) # type: ignore
+            return f"I need the following information to answer accurately: {missing}."
+
+        if api_summary.confidence == "insufficient_data": # type: ignore
+            limitations = " ".join(api_summary.limitations[:2]) # type: ignore
+            return (
+                "There is insufficient marketplace data for a reliable answer. "
+                f"{limitations}".strip()
+            )
+
+        if api_summary.prediction_result: # type: ignore
+            return (
+                "The prediction was calculated, but the language-generation service "
+                "is temporarily unavailable. Please retry shortly."
+            )
+
+        if api_summary.recommendation_result: # type: ignore
+            return (
+                "The recommendation analysis was calculated, but the language-generation "
+                "service is temporarily unavailable. Please retry shortly."
+            )
+
+        if api_summary.analytics_result: # type: ignore
+            return (
+                "Marketplace analytics were calculated, but the language-generation "
+                "service is temporarily unavailable. Please retry shortly."
+            )
+
+    if hits:
+        return (
+            "Relevant knowledge-base information was found, but the answer-generation "
+            "service is temporarily unavailable. Please retry shortly."
+        )
+
+    return (
+        "I could not retrieve enough information to answer this question. "
+        "Please refine the question or try again shortly."
+    )
+
+
+def _insufficient_response(
+    api_summary: Optional[QueryApiSummary],
+    plan: Mapping[str, Any],
+) -> str:
+    missing = list(plan.get("missing_parameters", []) or [])
+    if missing:
+        return (
+            "I need additional information before I can answer accurately: "
+            + ", ".join(missing)
+            + "."
+        )
+
+    if api_summary and api_summary.limitations: # type: ignore
+        return " ".join(api_summary.limitations[:2]) # type: ignore
+
+    return "No matching marketplace or knowledge-base information was found."
+
+
+def _answer_mode(
+    has_hits: bool,
+    api_summary: Optional[QueryApiSummary],
+    api_facts_used: bool,
+) -> str:
+    if has_hits and api_summary is not None:
+        return "retrieval_plus_api"
+    if api_summary is not None:
+        return "api_only"
+    if has_hits:
+        return "retrieval_only"
+    return "insufficient_data"
+
+
+# ---------------------------------------------------------------------------
+# Public orchestration entry point
+# ---------------------------------------------------------------------------
 
 
 def answer_question(request: QueryRequest) -> QueryResponse:
-    """
-    End-to-end RAG flow:
-      1) Embed question
-      2) Retrieve top-k chunks from OpenSearch
-      3) Optionally fetch operational API context via LLM planner
-      4) Build prompt with API + chunk context
-      5) Generate answer from LLM
-    """
+    """Run the complete GreenGrid grounded-answer pipeline."""
     top_k = request.top_k or settings.OPENSEARCH_TOP_K
 
-    question_embedding = bedrock_service.embed_text(request.question)
-    hits: List[Dict] = opensearch_service.search_similar_chunks(question_embedding, top_k=top_k)
-    api_summary, api_facts_used = _resolve_api_summary(request.question)
+    # Plan and API execution do not depend on successful RAG retrieval.
+    api_summary, api_facts_used, plan = _resolve_api_summary(request.question)
+    hits = _retrieve_chunks(request.question, top_k)
+    sources = _build_sources(hits)
 
-    if not hits and not api_facts_used:
+    if not hits and api_summary is None:
         return QueryResponse(
-            answer="I'm sorry, I don't have that information. Please get in touch with Ankit, who will be happy to help 🙂",
+            answer=_insufficient_response(None, plan),
             source_count=0,
             sources=[],
-            answer_mode="retrieval_only",
+            answer_mode="insufficient_data",
             api_facts_used=False,
             api_summary=None,
         )
 
     prompt = prompt_service.build_rag_prompt(
-        request.question,
-        hits,
-        api_context=api_summary.model_dump() if api_summary else None,
+        question=request.question,
+        retrieved_chunks=hits,
+        api_context=(
+            api_summary.model_dump(by_alias=True)
+            if api_summary is not None
+            else None
+        ),
     )
+
     try:
         answer = bedrock_service.generate_answer(prompt)
-    except RuntimeError as exc:
-        logger.warning("LLM generation unavailable, returning fallback answer: %s", exc)
-        answer = _build_fallback_answer(hits, exc)
+        if not answer.strip():
+            raise RuntimeError("Bedrock returned an empty answer.")
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("Final answer generation unavailable: %s", exc)
+        answer = _build_fallback_answer(api_summary, hits, exc)
 
-    sources: List[QuerySource] = []
-    for hit in hits:
-        sources.append(
-            QuerySource(
-                chunk_id=hit.get("chunk_id", ""),
-                document_id=hit.get("document_id", ""),
-                document_name=hit.get("document_name", ""),
-                document_type=hit.get("document_type", ""),
-                chunk_index=int(hit.get("chunk_index", 0)),
-                s3_uri=hit.get("s3_uri", ""),
-                score=float(hit.get("score", 0.0)),
-                snippet=(hit.get("text", "")[:280]).replace("\n", " "),
-            )
-        )
+    mode = _answer_mode(bool(hits), api_summary, api_facts_used)
 
-    answer_mode = "retrieval_plus_api" if api_facts_used else "retrieval_only"
     logger.info(
-        "answer_question: top_k=%d sources=%d api_facts_used=%s",
+        "answer_question: top_k=%d sources=%d mode=%s api_facts_used=%s intent=%s",
         top_k,
         len(sources),
+        mode,
         api_facts_used,
+        plan.get("intent", "none"),
     )
+
     return QueryResponse(
         answer=answer,
         source_count=len(sources),
         sources=sources,
-        answer_mode=answer_mode,
+        answer_mode=mode,
         api_facts_used=api_facts_used,
         api_summary=api_summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
+def _append_unique(values: Sequence[str], new_value: str) -> List[str]:
+    output = list(values)
+    if new_value not in output:
+        output.append(new_value)
+    return output
+
+
+def _safe_error(exc: Exception) -> str:
+    message = str(exc).strip() or type(exc).__name__
+    return message[:500]

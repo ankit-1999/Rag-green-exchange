@@ -1,4 +1,4 @@
-# GreenGrid Exchange RAG AI — Python dependencies
+# GreenGrid Exchange RAG, Analytics and Prediction AI - Python dependencies
 
 # Web framework
 fastapi>=0.111.0
@@ -11,12 +11,17 @@ pydantic-settings>=2.3.0
 # Environment variable loading
 python-dotenv>=1.0.0
 
-# AWS SDK — Bedrock, S3, Secrets Manager
+# AWS SDK - Bedrock, S3 and Secrets Manager
 boto3>=1.34.0
 
-# OpenSearch client with AWS SigV4 auth
+# OpenSearch client with AWS SigV4 authentication
 opensearch-py>=2.6.0
 requests-aws4auth>=1.3.0
 
-# HTTP client (used by opensearch-py)
+# HTTP clients
+# requests is used by opensearch-py and existing integrations.
 requests>=2.32.0
+
+# httpx is used for AI-service-to-marketplace-backend API calls.
+# It supports connection/read timeouts, retries and clean query-parameter handling.
+httpx>=0.27.0
