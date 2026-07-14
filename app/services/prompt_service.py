@@ -4,13 +4,17 @@ prompt_service.py
 
 Builds the final grounded answer prompt for GreenGrid Exchange.
 
+The final LLM answer is returned as a polished HTML fragment so the frontend can
+render it directly inside the chat message. The response must never contain a
+complete HTML document, JavaScript, CSS, event handlers, forms, or unsafe URLs.
+
 The prompt combines:
 - Retrieved RAG chunks for rules and explanations
 - Compact marketplace API metadata
 - Deterministic analytics, prediction, and recommendation results
 - The user's question
 
-The LLM must explain calculated results. It must not recalculate, alter, or
+The LLM explains calculated results. The LLM must not recalculate, modify, or
 invent marketplace values.
 """
 
@@ -33,6 +37,27 @@ RECOMMENDATION_INTENTS = {
     "seller_recommendation",
     "buyer_recommendation",
 }
+
+ALLOWED_HTML_TAGS = (
+    "section",
+    "div",
+    "p",
+    "h3",
+    "h4",
+    "ul",
+    "ol",
+    "li",
+    "strong",
+    "span",
+    "small",
+    "br",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +115,7 @@ def _needs_elaborate_response(question: str) -> bool:
 
 
 def _build_context_blocks(retrieved_chunks: Sequence[Mapping[str, Any]]) -> str:
-    """Build bounded RAG context blocks with stable source identifiers."""
+    """Build RAG context blocks with stable source identifiers."""
     blocks: List[str] = []
 
     for index, chunk in enumerate(retrieved_chunks, start=1):
@@ -120,13 +145,12 @@ def _build_context_blocks(retrieved_chunks: Sequence[Mapping[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _compact_api_context(api_context: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+def _compact_api_context(
+    api_context: Optional[Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
     """
-    Keep deterministic results and execution metadata while removing full raw
+    Keep calculated results and execution metadata while removing complete raw
     API record arrays from the final LLM prompt.
-
-    Complete datasets are processed by analytics_service. Nova Micro receives
-    only calculated results, record counts, filters, samples, and limitations.
     """
     if not api_context:
         return None
@@ -191,61 +215,189 @@ def _compact_api_context(api_context: Optional[Mapping[str, Any]]) -> Optional[D
 
 
 # ---------------------------------------------------------------------------
-# Response format selection
+# HTML formatting guidance
 # ---------------------------------------------------------------------------
 
 
-def _response_format(
+def _html_design_system() -> str:
+    """Return the fixed visual vocabulary allowed in model-generated HTML."""
+    return """
+HTML DESIGN SYSTEM
+
+Return one safe HTML fragment. Use only these tags:
+section, div, p, h3, h4, ul, ol, li, strong, span, small, br, table, thead,
+tbody, tr, th, td.
+
+Allowed class names:
+- ai-response
+- ai-hero
+- ai-title
+- ai-subtitle
+- ai-section
+- ai-section-title
+- ai-highlight
+- ai-success
+- ai-warning
+- ai-danger
+- ai-info
+- ai-neutral
+- ai-grid
+- ai-card
+- ai-card-title
+- ai-card-value
+- ai-card-label
+- ai-list
+- ai-metric-list
+- ai-metric-row
+- ai-metric-name
+- ai-metric-value
+- ai-badge
+- ai-badge-high
+- ai-badge-medium
+- ai-badge-low
+- ai-badge-insufficient
+- ai-table
+- ai-note
+- ai-muted
+- ai-source-solar
+- ai-source-wind
+- ai-source-hydro
+
+Never use style attributes. Never invent class names outside this list.
+Never use scripts, links, images, forms, inputs, buttons, iframes, SVG, canvas,
+video, audio, object, embed, meta, base, or event-handler attributes.
+Never include id, href, src, onclick, onerror, onload, data-*, aria-*, role,
+title, target, contenteditable, or any other attributes.
+The only permitted attribute is class with one or more allowed class names.
+
+Use Unicode symbols sparingly:
+- Prediction: &#128302;
+- Recommendation: &#10024;
+- Analytics: &#128200;
+- Success: &#9989;
+- Warning: &#9888;&#65039;
+- Information: &#8505;&#65039;
+- Solar: &#9728;&#65039;
+- Wind: &#127788;&#65039;
+- Hydro: &#128167;
+- Location: &#128205;
+- Confidence: &#127919;
+
+Prefer short cards, clear labels, compact bullet lists, and small tables.
+Do not create decorative content that is not supported by the data.
+""".strip()
+
+
+def _response_template(
     question: str,
     api_context: Optional[Mapping[str, Any]],
 ) -> str:
-    """Return intent-specific response instructions."""
+    """Return intent-specific HTML structure requirements."""
     if not api_context:
         if _needs_elaborate_response(question):
-            return (
-                "Use this structure:\n"
-                "1. Direct answer\n"
-                "2. Explanation\n"
-                "3. Applicable rules or limitations\n"
-                "Keep the answer grounded in retrieved documents."
-            )
-        return (
-            "Give a direct answer in one short paragraph. Add bullets only when "
-            "they improve clarity."
-        )
+            return """
+Use this HTML structure:
+<section class="ai-response">
+  <div class="ai-hero ai-info">
+    <h3 class="ai-title">Direct answer</h3>
+    <p class="ai-subtitle">...</p>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Explanation</h4>
+    <p>...</p>
+  </div>
+  <div class="ai-note ai-neutral">Applicable rule or limitation.</div>
+</section>
+""".strip()
+        return """
+Use one compact HTML response:
+<section class="ai-response">
+  <div class="ai-hero ai-info">
+    <h3 class="ai-title">Answer</h3>
+    <p class="ai-subtitle">Direct answer.</p>
+  </div>
+</section>
+""".strip()
 
     intent = str(api_context.get("intent", "none") or "none")
-    is_prediction = bool(api_context.get("is_prediction", False)) or intent in PREDICTION_INTENTS
+    is_prediction = (
+        bool(api_context.get("is_prediction", False))
+        or intent in PREDICTION_INTENTS
+    )
     is_recommendation = (
         bool(api_context.get("is_recommendation", False))
         or intent in RECOMMENDATION_INTENTS
     )
+    confidence = str(api_context.get("confidence", "") or "").lower()
 
     if is_prediction:
-        return (
-            "Use exactly these headings when supported by the supplied data:\n"
-            "Prediction\n"
-            "Key figures\n"
-            "Confidence\n"
-            "Data period and method\n"
-            "Factors considered\n"
-            "Limitations\n"
-            "Lead with the predicted result. Include expected lower and upper "
-            "bounds when supplied. Clearly state that the forecast is not guaranteed."
-        )
+        state_class = "ai-warning" if confidence == "insufficient_data" else "ai-info"
+        return f"""
+Use this structure:
+<section class="ai-response">
+  <div class="ai-hero {state_class}">
+    <h3 class="ai-title">&#128302; Prediction</h3>
+    <p class="ai-subtitle">Lead with the predicted result, or clearly state that the data is insufficient.</p>
+  </div>
+  <div class="ai-grid">
+    <div class="ai-card">
+      <div class="ai-card-label">Predicted leader</div>
+      <div class="ai-card-value">...</div>
+    </div>
+    <div class="ai-card">
+      <div class="ai-card-label">Expected value or range</div>
+      <div class="ai-card-value">...</div>
+    </div>
+    <div class="ai-card">
+      <div class="ai-card-label">Confidence</div>
+      <div class="ai-card-value"><span class="ai-badge ...">...</span></div>
+    </div>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">&#128200; Key figures</h4>
+    <div class="ai-metric-list">Use compact metric rows or a small table.</div>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Data period and method</h4>
+    <p>State exact historical and forecast dates plus the calculation method.</p>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Factors considered</h4>
+    <ul class="ai-list"><li>Only supplied factors.</li></ul>
+  </div>
+  <div class="ai-note ai-warning"><strong>Limitations:</strong> Include supplied limitations and state that forecasts are not guaranteed.</div>
+</section>
+
+Confidence badge mapping:
+- high: ai-badge ai-badge-high
+- medium: ai-badge ai-badge-medium
+- low: ai-badge ai-badge-low
+- insufficient_data: ai-badge ai-badge-insufficient
+""".strip()
 
     if is_recommendation:
-        return (
-            "Use exactly these headings when supported by the supplied data:\n"
-            "Recommendation\n"
-            "Why\n"
-            "Supporting metrics\n"
-            "Confidence\n"
-            "Limitations\n"
-            "Lead with the recommendation. If recommendation_result says "
-            "no_strong_preference=true, explicitly say there is no strong preference. "
-            "Do not present the recommendation as guaranteed or as financial advice."
-        )
+        return """
+Use this structure:
+<section class="ai-response">
+  <div class="ai-hero ai-success">
+    <h3 class="ai-title">&#10024; Recommendation</h3>
+    <p class="ai-subtitle">Lead with the recommendation. If no_strong_preference is true, say so clearly.</p>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Why</h4>
+    <ul class="ai-list"><li>Use only supplied reasons.</li></ul>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">&#128200; Supporting metrics</h4>
+    <div class="ai-metric-list">Use metric rows or a compact comparison table.</div>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">&#127919; Confidence</h4>
+    <p><span class="ai-badge ...">...</span></p>
+  </div>
+  <div class="ai-note ai-warning"><strong>Limitations:</strong> State that the result is decision support, not a guarantee or financial advice.</div>
+</section>
+""".strip()
 
     if intent in {
         "historical_supply",
@@ -256,22 +408,39 @@ def _response_format(
         "supply_stability",
         "price_volatility",
     }:
-        return (
-            "Use these headings:\n"
-            "Finding\n"
-            "Key metrics\n"
-            "Period and method\n"
-            "Limitations\n"
-            "Lead with the main finding and keep the response concise."
-        )
+        return """
+Use this structure:
+<section class="ai-response">
+  <div class="ai-hero ai-info">
+    <h3 class="ai-title">&#128200; Analysis</h3>
+    <p class="ai-subtitle">Lead with the main finding.</p>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Key metrics</h4>
+    <div class="ai-metric-list">Use metric rows or a compact table.</div>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Period and method</h4>
+    <p>State exact dates and calculation method.</p>
+  </div>
+  <div class="ai-note ai-neutral"><strong>Limitations:</strong> Include only supplied limitations.</div>
+</section>
+""".strip()
 
-    return (
-        "Use these headings:\n"
-        "Answer\n"
-        "Key metrics\n"
-        "Data scope\n"
-        "Lead with the direct marketplace finding."
-    )
+    return """
+Use this structure:
+<section class="ai-response">
+  <div class="ai-hero ai-info">
+    <h3 class="ai-title">&#8505;&#65039; Marketplace insight</h3>
+    <p class="ai-subtitle">Lead with the direct finding.</p>
+  </div>
+  <div class="ai-section">
+    <h4 class="ai-section-title">Key metrics</h4>
+    <div class="ai-metric-list">Use compact metric rows.</div>
+  </div>
+  <div class="ai-note ai-neutral">State the data scope.</div>
+</section>
+""".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -284,19 +453,15 @@ def build_rag_prompt(
     retrieved_chunks: List[Dict[str, Any]],
     api_context: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """
-    Build the final deterministic prompt used by Nova Micro.
-
-    API facts and deterministic analytics are authoritative for live numbers.
-    RAG chunks are authoritative for project rules, definitions, formulas, and
-    limitations. If live data and a static example conflict, live API-derived
-    results take precedence.
-    """
+    """Build the final deterministic HTML-answer prompt for Nova Micro."""
     normalized_question = _normalize_question(question)
     rag_context = _build_context_blocks(retrieved_chunks)
     compact_api_context = _compact_api_context(api_context)
     api_text = _json_text(compact_api_context) if compact_api_context else "None"
-    format_instructions = _response_format(normalized_question, compact_api_context)
+    response_template = _response_template(
+        normalized_question,
+        compact_api_context,
+    )
 
     return f"""
 You are the grounded analytics, prediction, and recommendation assistant for
@@ -308,8 +473,8 @@ SUPPORTED ENERGY SOURCES:
 - HYDRO
 
 GROUNDING PRIORITY:
-1. ANALYTICS_RESULT, PREDICTION_RESULT, and RECOMMENDATION_RESULT contain
-   deterministic calculations and must be treated as authoritative.
+1. analytics_result, prediction_result, and recommendation_result contain
+   deterministic calculations and are authoritative.
 2. Live API facts and record counts are authoritative for current marketplace
    values.
 3. RAG_CONTEXT is authoritative for definitions, marketplace rules,
@@ -325,33 +490,34 @@ FACT DEFINITIONS:
   calculation explicitly says otherwise.
 - Demand-to-supply ratio means completed demand kWh divided by listed supply kWh
   for the same scope and period.
-- HYDRO is the supported source name. Do not output SMALL_HYDRO.
+- HYDRO is the supported source name.
 
-STRICT ANSWER RULES:
+STRICT CONTENT RULES:
 - Use only API_CONTEXT and RAG_CONTEXT.
 - Do not invent, estimate, alter, round differently, or recalculate supplied
   numbers.
 - Do not infer missing sources, locations, prices, quantities, dates, or status.
-- Do not expose private credentials, tokens, passwords, private keys, or personal
-  information.
+- Do not expose credentials, tokens, passwords, private keys, private wallet
+  data, or personal information.
 - Do not claim that the assistant executed a purchase, listing, cancellation,
-  blockchain transaction, or any state-changing operation.
+  blockchain transaction, or state-changing action.
 - Do not call a forecast an observed fact.
-- Do not call a recommendation guaranteed or provide financial advice.
-- If confidence is insufficient_data, clearly say there is insufficient data for
-  a reliable prediction or recommendation. Do not force a winner.
-- If missing_parameters is non-empty, explain what is missing. Do not invent it.
-- If API execution failed or returned partial data, mention the relevant
-  limitation.
-- If no matching records exist, say that no matching records were found.
-- State exact historical and forecast periods when provided.
-- State the calculation method when provided.
-- Keep source names human-readable as Solar, Wind, and Hydro.
-- Do not include document filenames or API tool names inside the prose unless the
-  user explicitly asks; the client displays sources and APIs separately.
+- Do not describe a recommendation as guaranteed or as financial advice.
+- If confidence is insufficient_data, clearly state that reliable prediction or
+  recommendation is not possible and do not force a winner.
+- If missing_parameters is non-empty, explain what is missing without inventing it.
+- If an API failed or returned partial data, show that limitation prominently.
+- If no matching records exist, state that no matching records were found.
+- State exact historical and forecast periods when supplied.
+- State the calculation method when supplied.
+- Use human-readable source labels: Solar, Wind, and Hydro.
+- Do not put document names or API tool names in the answer unless explicitly
+  requested; the client renders sources and API usage separately.
 
-RESPONSE FORMAT:
-{format_instructions}
+{_html_design_system()}
+
+REQUIRED RESPONSE TEMPLATE:
+{response_template}
 
 USER QUESTION:
 {normalized_question}
@@ -362,7 +528,6 @@ API_CONTEXT:
 RAG_CONTEXT:
 {rag_context}
 
-Return only the final answer in plain text with short headings and bullets where
-requested. Do not return JSON, Markdown code fences, API payloads, or hidden
-reasoning.
+Return only the safe HTML fragment. Do not return Markdown, JSON, code fences,
+a full HTML document, a style block, or explanatory text outside the fragment.
 """.strip()
