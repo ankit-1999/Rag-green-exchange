@@ -26,7 +26,7 @@ _TOOL_CATALOG: List[Dict] = [
     {
         "name": "get_all_listings",
         "http_method": "GET",
-        "endpoint": "/api/v1/public/listings",
+        "endpoint": "/api/v1/listings",
         "purpose": (
             "Retrieve marketplace listings for historical supply, listing "
             "status, source, location, asking-price, stability, and "
@@ -274,7 +274,7 @@ _TOOL_CATALOG: List[Dict] = [
     {
         "name": "get_all_purchases",
         "http_method": "GET",
-        "endpoint": "/api/v1/public/purchases",
+        "endpoint": "/api/v1/purchases",
         "purpose": (
             "Retrieve marketplace-wide purchase records for realized demand, "
             "realized selling-price, demand trend, price volatility, "

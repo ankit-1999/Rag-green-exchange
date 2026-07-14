@@ -101,7 +101,7 @@ def _normalize_base_url(value: str) -> str:
     The returned URL never ends with a slash so endpoint paths can be joined
     consistently:
 
-        f"{settings.MARKETPLACE_API_BASE_URL}/api/v1/public/listings"
+        f"{settings.MARKETPLACE_API_BASE_URL}/api/v1/listings"
     """
     normalized = value.strip().rstrip("/")
 
@@ -340,7 +340,7 @@ class Settings:
 
     MARKETPLACE_ALL_LISTINGS_PATH: str = os.getenv(
         "MARKETPLACE_ALL_LISTINGS_PATH",
-        "/api/v1/public/listings",
+        "/api/v1/listings",
     )
 
     MARKETPLACE_ACTIVE_LISTINGS_PATH: str = os.getenv(
@@ -350,7 +350,7 @@ class Settings:
 
     MARKETPLACE_ALL_PURCHASES_PATH: str = os.getenv(
         "MARKETPLACE_ALL_PURCHASES_PATH",
-        "/api/v1/public/purchases",
+        "/api/v1/purchases",
     )
 
     # -----------------------------------------------------------------------
