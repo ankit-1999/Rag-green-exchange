@@ -10,7 +10,7 @@ complete HTML document, JavaScript, CSS, event handlers, forms, or unsafe URLs.
 
 The prompt combines:
 - Retrieved RAG chunks for rules and explanations
-- Compact marketplace API metadata
+- Compact marketplace API metadata and normalized API aggregates
 - Deterministic analytics, prediction, and recommendation results
 - The user's question
 
@@ -24,8 +24,44 @@ import json
 from datetime import date, datetime
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from app.config import settings
 
-SUPPORTED_ENERGY_SOURCES = ("SOLAR", "WIND", "HYDRO")
+
+SUPPORTED_ENERGY_SOURCES = tuple(
+    getattr(
+        settings,
+        "SUPPORTED_ENERGY_SOURCES",
+        (
+            "SOLAR",
+            "WIND",
+            "HYDRO",
+            "BIOMASS",
+            "GEOTHERMAL",
+            "TIDAL",
+            "OTHER",
+        ),
+    )
+)
+
+SOURCE_DISPLAY_NAMES = {
+    "SOLAR": "Solar",
+    "WIND": "Wind",
+    "HYDRO": "Hydro",
+    "BIOMASS": "Biomass",
+    "GEOTHERMAL": "Geothermal",
+    "TIDAL": "Tidal",
+    "OTHER": "Other",
+}
+
+SOURCE_SYMBOLS = {
+    "SOLAR": "&#9728;&#65039;",
+    "WIND": "&#127788;&#65039;",
+    "HYDRO": "&#128167;",
+    "BIOMASS": "&#127807;",
+    "GEOTHERMAL": "&#127755;",
+    "TIDAL": "&#127754;",
+    "OTHER": "&#9889;",
+}
 
 PREDICTION_INTENTS = {
     "demand_prediction",
@@ -36,6 +72,17 @@ PREDICTION_INTENTS = {
 RECOMMENDATION_INTENTS = {
     "seller_recommendation",
     "buyer_recommendation",
+}
+
+ANALYTICS_INTENTS = {
+    "historical_supply",
+    "historical_demand",
+    "average_selling_price",
+    "demand_supply_ratio",
+    "market_balance",
+    "supply_stability",
+    "price_volatility",
+    "supply_by_location",
 }
 
 ALLOWED_HTML_TAGS = (
@@ -57,6 +104,46 @@ ALLOWED_HTML_TAGS = (
     "tr",
     "th",
     "td",
+)
+
+ALLOWED_HTML_CLASSES = (
+    "ai-response",
+    "ai-hero",
+    "ai-title",
+    "ai-subtitle",
+    "ai-section",
+    "ai-section-title",
+    "ai-highlight",
+    "ai-success",
+    "ai-warning",
+    "ai-danger",
+    "ai-info",
+    "ai-neutral",
+    "ai-grid",
+    "ai-card",
+    "ai-card-title",
+    "ai-card-value",
+    "ai-card-label",
+    "ai-list",
+    "ai-metric-list",
+    "ai-metric-row",
+    "ai-metric-name",
+    "ai-metric-value",
+    "ai-badge",
+    "ai-badge-high",
+    "ai-badge-medium",
+    "ai-badge-low",
+    "ai-badge-insufficient",
+    "ai-table",
+    "ai-note",
+    "ai-muted",
+    "ai-source-solar",
+    "ai-source-wind",
+    "ai-source-hydro",
+    "ai-source-biomass",
+    "ai-source-geothermal",
+    "ai-source-tidal",
+    "ai-source-other",
 )
 
 
@@ -109,12 +196,43 @@ def _needs_elaborate_response(question: str) -> bool:
     return any(keyword in normalized for keyword in keywords)
 
 
+def _supported_sources_text() -> str:
+    return ", ".join(
+        SOURCE_DISPLAY_NAMES.get(source, source.title())
+        for source in SUPPORTED_ENERGY_SOURCES
+    )
+
+
+def _supported_sources_lines() -> str:
+    return "\n".join(
+        f"- {source} ({SOURCE_DISPLAY_NAMES.get(source, source.title())})"
+        for source in SUPPORTED_ENERGY_SOURCES
+    )
+
+
+def _source_class_lines() -> str:
+    return "\n".join(
+        f"- ai-source-{source.lower().replace('_', '-')}"
+        for source in SUPPORTED_ENERGY_SOURCES
+    )
+
+
+def _source_symbol_lines() -> str:
+    return "\n".join(
+        f"- {SOURCE_DISPLAY_NAMES.get(source, source.title())}: "
+        f"{SOURCE_SYMBOLS.get(source, '&#9889;')}"
+        for source in SUPPORTED_ENERGY_SOURCES
+    )
+
+
 # ---------------------------------------------------------------------------
 # RAG source construction
 # ---------------------------------------------------------------------------
 
 
-def _build_context_blocks(retrieved_chunks: Sequence[Mapping[str, Any]]) -> str:
+def _build_context_blocks(
+    retrieved_chunks: Sequence[Mapping[str, Any]],
+) -> str:
     """Build RAG context blocks with stable source identifiers."""
     blocks: List[str] = []
 
@@ -149,8 +267,8 @@ def _compact_api_context(
     api_context: Optional[Mapping[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Keep calculated results and execution metadata while removing complete raw
-    API record arrays from the final LLM prompt.
+    Keep calculated results, normalized API aggregates, and execution metadata
+    while removing complete raw API record arrays from the final LLM prompt.
     """
     if not api_context:
         return None
@@ -186,12 +304,19 @@ def _compact_api_context(
 
             data = result.get("data", {})
             sample_records: List[Any] = []
+            aggregates: Dict[str, Any] = {}
             response_metadata: Dict[str, Any] = {}
 
             if isinstance(data, Mapping):
                 possible_samples = data.get("sample_records", [])
                 if isinstance(possible_samples, list):
-                    sample_records = possible_samples[:5]
+                    sample_records = possible_samples[
+                        : settings.ANALYTICS_LLM_SAMPLE_RECORDS
+                    ]
+
+                possible_aggregates = data.get("aggregates", {})
+                if isinstance(possible_aggregates, Mapping):
+                    aggregates = dict(possible_aggregates)
 
                 possible_metadata = data.get("response_metadata", {})
                 if isinstance(possible_metadata, Mapping):
@@ -207,6 +332,7 @@ def _compact_api_context(
                     "execution_status": result.get("execution_status"),
                     "error": result.get("error"),
                     "sample_records": sample_records,
+                    "aggregates": aggregates,
                     "response_metadata": response_metadata,
                 }
             )
@@ -221,47 +347,17 @@ def _compact_api_context(
 
 def _html_design_system() -> str:
     """Return the fixed visual vocabulary allowed in model-generated HTML."""
-    return """
+    return f"""
 HTML DESIGN SYSTEM
 
 Return one safe HTML fragment. Use only these tags:
-section, div, p, h3, h4, ul, ol, li, strong, span, small, br, table, thead,
-tbody, tr, th, td.
+{', '.join(ALLOWED_HTML_TAGS)}.
 
 Allowed class names:
-- ai-response
-- ai-hero
-- ai-title
-- ai-subtitle
-- ai-section
-- ai-section-title
-- ai-highlight
-- ai-success
-- ai-warning
-- ai-danger
-- ai-info
-- ai-neutral
-- ai-grid
-- ai-card
-- ai-card-title
-- ai-card-value
-- ai-card-label
-- ai-list
-- ai-metric-list
-- ai-metric-row
-- ai-metric-name
-- ai-metric-value
-- ai-badge
-- ai-badge-high
-- ai-badge-medium
-- ai-badge-low
-- ai-badge-insufficient
-- ai-table
-- ai-note
-- ai-muted
-- ai-source-solar
-- ai-source-wind
-- ai-source-hydro
+{chr(10).join(f'- {class_name}' for class_name in ALLOWED_HTML_CLASSES)}
+
+Source-specific class names:
+{_source_class_lines()}
 
 Never use style attributes. Never invent class names outside this list.
 Never use scripts, links, images, forms, inputs, buttons, iframes, SVG, canvas,
@@ -277,11 +373,31 @@ Use Unicode symbols sparingly:
 - Success: &#9989;
 - Warning: &#9888;&#65039;
 - Information: &#8505;&#65039;
-- Solar: &#9728;&#65039;
-- Wind: &#127788;&#65039;
-- Hydro: &#128167;
 - Location: &#128205;
 - Confidence: &#127919;
+{_source_symbol_lines()}
+
+TABLE RULES:
+- Whenever two or more sources, locations, listings, periods, or options are
+  compared, use a real HTML table.
+- Use exactly this nesting:
+  <table class="ai-table"><thead><tr><th>...</th></tr></thead>
+  <tbody><tr><td>...</td></tr></tbody></table>
+- Put every heading in its own th element.
+- Put every value in its own td element.
+- Never flatten a table into plain text.
+- When a general source comparison is requested, include all supported sources:
+  {_supported_sources_text()}.
+- If a supported source has no value, show 0 for quantities or percentages and
+  Not available for unavailable prices or predictions.
+
+VISIBLE-CONTENT RULES:
+- Never emit instructional placeholder text such as "Lead with...", "Use this
+  structure", "Use metric rows", "Only supplied factors", or "...".
+- Every visible sentence must be a final answer grounded in supplied context.
+- Never include Markdown fences such as ```html or ```.
+- Do not display internal enum keys or raw JSON keys. Convert insufficient_data
+  to the human-readable label "Insufficient data".
 
 Prefer short cards, clear labels, compact bullet lists, and small tables.
 Do not create decorative content that is not supported by the data.
@@ -296,27 +412,15 @@ def _response_template(
     if not api_context:
         if _needs_elaborate_response(question):
             return """
-Use this HTML structure:
-<section class="ai-response">
-  <div class="ai-hero ai-info">
-    <h3 class="ai-title">Direct answer</h3>
-    <p class="ai-subtitle">...</p>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Explanation</h4>
-    <p>...</p>
-  </div>
-  <div class="ai-note ai-neutral">Applicable rule or limitation.</div>
-</section>
+Create one ai-response section containing:
+1. An ai-hero ai-info block with a concise Direct answer title and final answer.
+2. An ai-section with an Explanation heading and grounded explanation.
+3. An ai-note ai-neutral block only when a rule or limitation is relevant.
+Do not copy these instructions into the visible response.
 """.strip()
         return """
-Use one compact HTML response:
-<section class="ai-response">
-  <div class="ai-hero ai-info">
-    <h3 class="ai-title">Answer</h3>
-    <p class="ai-subtitle">Direct answer.</p>
-  </div>
-</section>
+Create one compact ai-response section with an ai-hero ai-info block containing
+an Answer title and a direct final answer. Do not copy this instruction.
 """.strip()
 
     intent = str(api_context.get("intent", "none") or "none")
@@ -331,115 +435,63 @@ Use one compact HTML response:
     confidence = str(api_context.get("confidence", "") or "").lower()
 
     if is_prediction:
-        state_class = "ai-warning" if confidence == "insufficient_data" else "ai-info"
+        state_class = (
+            "ai-warning"
+            if confidence == "insufficient_data"
+            else "ai-info"
+        )
         return f"""
-Use this structure:
-<section class="ai-response">
-  <div class="ai-hero {state_class}">
-    <h3 class="ai-title">&#128302; Prediction</h3>
-    <p class="ai-subtitle">Lead with the predicted result, or clearly state that the data is insufficient.</p>
-  </div>
-  <div class="ai-grid">
-    <div class="ai-card">
-      <div class="ai-card-label">Predicted leader</div>
-      <div class="ai-card-value">...</div>
-    </div>
-    <div class="ai-card">
-      <div class="ai-card-label">Expected value or range</div>
-      <div class="ai-card-value">...</div>
-    </div>
-    <div class="ai-card">
-      <div class="ai-card-label">Confidence</div>
-      <div class="ai-card-value"><span class="ai-badge ...">...</span></div>
-    </div>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">&#128200; Key figures</h4>
-    <div class="ai-metric-list">Use compact metric rows or a small table.</div>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Data period and method</h4>
-    <p>State exact historical and forecast dates plus the calculation method.</p>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Factors considered</h4>
-    <ul class="ai-list"><li>Only supplied factors.</li></ul>
-  </div>
-  <div class="ai-note ai-warning"><strong>Limitations:</strong> Include supplied limitations and state that forecasts are not guaranteed.</div>
-</section>
-
-Confidence badge mapping:
-- high: ai-badge ai-badge-high
-- medium: ai-badge ai-badge-medium
-- low: ai-badge ai-badge-low
-- insufficient_data: ai-badge ai-badge-insufficient
+Create one ai-response section containing:
+1. An ai-hero {state_class} block titled &#128302; Prediction with the actual
+   prediction, or a clear insufficient-data statement.
+2. An ai-grid with cards for predicted leader, expected value or range, and
+   confidence when those values are supplied.
+3. An ai-section titled &#128200; Key figures containing a proper ai-table when
+   multiple sources are compared.
+4. An ai-section titled Data period and method with exact supplied dates and the
+   supplied calculation method.
+5. An ai-section titled Factors considered using only supplied factors.
+6. An ai-note ai-warning block containing supplied limitations and stating that
+   forecasts are not guaranteed.
+Use the confidence classes high, medium, low, or insufficient as applicable.
+Do not copy these instructions or placeholders into the response.
 """.strip()
 
     if is_recommendation:
         return """
-Use this structure:
-<section class="ai-response">
-  <div class="ai-hero ai-success">
-    <h3 class="ai-title">&#10024; Recommendation</h3>
-    <p class="ai-subtitle">Lead with the recommendation. If no_strong_preference is true, say so clearly.</p>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Why</h4>
-    <ul class="ai-list"><li>Use only supplied reasons.</li></ul>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">&#128200; Supporting metrics</h4>
-    <div class="ai-metric-list">Use metric rows or a compact comparison table.</div>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">&#127919; Confidence</h4>
-    <p><span class="ai-badge ...">...</span></p>
-  </div>
-  <div class="ai-note ai-warning"><strong>Limitations:</strong> State that the result is decision support, not a guarantee or financial advice.</div>
-</section>
+Create one ai-response section containing:
+1. An ai-hero ai-success block titled &#10024; Recommendation with the actual
+   recommendation. If no_strong_preference is true, explicitly state that no
+   strong preference exists. If confidence is insufficient_data, do not force a
+   recommendation.
+2. An ai-section titled Why with concise grounded reasons.
+3. An ai-section titled &#128200; Supporting metrics containing a proper ai-table
+   when multiple sources or listings are compared.
+4. An ai-section titled &#127919; Confidence with the correct ai-badge class.
+5. An ai-note ai-warning block containing supplied limitations and stating that
+   the result is decision support, not a guarantee or financial advice.
+Do not copy these instructions or placeholders into the response.
 """.strip()
 
-    if intent in {
-        "historical_supply",
-        "historical_demand",
-        "average_selling_price",
-        "demand_supply_ratio",
-        "market_balance",
-        "supply_stability",
-        "price_volatility",
-    }:
+    if intent in ANALYTICS_INTENTS:
         return """
-Use this structure:
-<section class="ai-response">
-  <div class="ai-hero ai-info">
-    <h3 class="ai-title">&#128200; Analysis</h3>
-    <p class="ai-subtitle">Lead with the main finding.</p>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Key metrics</h4>
-    <div class="ai-metric-list">Use metric rows or a compact table.</div>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Period and method</h4>
-    <p>State exact dates and calculation method.</p>
-  </div>
-  <div class="ai-note ai-neutral"><strong>Limitations:</strong> Include only supplied limitations.</div>
-</section>
+Create one ai-response section containing:
+1. An ai-hero ai-info block titled &#128200; Analysis with the main finding.
+2. An ai-section titled Key metrics containing a proper ai-table whenever
+   multiple sources, locations, or periods are compared.
+3. An ai-section titled Period and method using exact supplied dates and method.
+4. An ai-note ai-neutral block only when supplied limitations exist.
+Do not copy these instructions or placeholders into the response.
 """.strip()
 
     return """
-Use this structure:
-<section class="ai-response">
-  <div class="ai-hero ai-info">
-    <h3 class="ai-title">&#8505;&#65039; Marketplace insight</h3>
-    <p class="ai-subtitle">Lead with the direct finding.</p>
-  </div>
-  <div class="ai-section">
-    <h4 class="ai-section-title">Key metrics</h4>
-    <div class="ai-metric-list">Use compact metric rows.</div>
-  </div>
-  <div class="ai-note ai-neutral">State the data scope.</div>
-</section>
+Create one ai-response section containing:
+1. An ai-hero ai-info block titled &#8505;&#65039; Marketplace insight with the
+   direct live marketplace finding.
+2. An ai-section titled Key metrics. Use a proper ai-table for multi-source or
+   multi-option comparisons.
+3. An ai-note ai-neutral block stating the supplied data scope or as-of time.
+Do not copy these instructions or placeholders into the response.
 """.strip()
 
 
@@ -468,37 +520,44 @@ You are the grounded analytics, prediction, and recommendation assistant for
 GreenGrid Exchange.
 
 SUPPORTED ENERGY SOURCES:
-- SOLAR
-- WIND
-- HYDRO
+{_supported_sources_lines()}
 
 GROUNDING PRIORITY:
 1. analytics_result, prediction_result, and recommendation_result contain
    deterministic calculations and are authoritative.
-2. Live API facts and record counts are authoritative for current marketplace
-   values.
+2. Live API facts, normalized aggregates, and record counts are authoritative
+   for current and historical marketplace values.
 3. RAG_CONTEXT is authoritative for definitions, marketplace rules,
    methodology, and limitations.
 4. If a static document example conflicts with live API-derived data, use the
    live API-derived value.
+5. Static RAG examples must never substitute for unavailable live marketplace
+   data.
 
 FACT DEFINITIONS:
 - Current available supply means active available listing energy_kwh.
 - Historical listed supply means listing energy_kwh created in the stated period.
 - Realized demand means energy_kwh from completed purchases.
 - Average selling price means volume-weighted realized price unless the supplied
-  calculation explicitly says otherwise.
+  calculation explicitly states another validated method.
 - Demand-to-supply ratio means completed demand kWh divided by listed supply kWh
-  for the same scope and period.
-- HYDRO is the supported source name.
+  for the same source, location, and period.
+- Supported renewable source values are: {', '.join(SUPPORTED_ENERGY_SOURCES)}.
+- Normalize old Small Hydro wording to Hydro. Never display SMALL_HYDRO as a
+  separate source.
 
 STRICT CONTENT RULES:
 - Use only API_CONTEXT and RAG_CONTEXT.
 - Do not invent, estimate, alter, round differently, or recalculate supplied
   numbers.
 - Do not infer missing sources, locations, prices, quantities, dates, or status.
+- For general source comparisons, consider every supported source. If the API
+  result contains no record for a supported source, show zero or Not available
+  rather than silently omitting that source.
+- For explicitly scoped questions, compare only the requested sources,
+  locations, or listings.
 - Do not expose credentials, tokens, passwords, private keys, private wallet
-  data, or personal information.
+  data, personal information, seller identifiers, or buyer identifiers.
 - Do not claim that the assistant executed a purchase, listing, cancellation,
   blockchain transaction, or state-changing action.
 - Do not call a forecast an observed fact.
@@ -507,10 +566,11 @@ STRICT CONTENT RULES:
   recommendation is not possible and do not force a winner.
 - If missing_parameters is non-empty, explain what is missing without inventing it.
 - If an API failed or returned partial data, show that limitation prominently.
-- If no matching records exist, state that no matching records were found.
+- If no matching records or aggregate data exist, state that no matching live
+  marketplace data was found.
 - State exact historical and forecast periods when supplied.
 - State the calculation method when supplied.
-- Use human-readable source labels: Solar, Wind, and Hydro.
+- Use human-readable source labels: {_supported_sources_text()}.
 - Do not put document names or API tool names in the answer unless explicitly
   requested; the client renders sources and API usage separately.
 

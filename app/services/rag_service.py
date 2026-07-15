@@ -26,11 +26,11 @@ from pydantic import ValidationError
 from app.config import settings
 from app.schemas.query_schema import (
     QueryApiSummary,
-    QueryPeriod, # type: ignore
+    QueryPeriod,  # type: ignore
     QueryRequest,
     QueryResponse,
     QuerySource,
-    QueryToolResult, # type: ignore
+    QueryToolResult,  # type: ignore
 )
 from app.services import (
     analytics_service,
@@ -90,13 +90,17 @@ def _execute_plan(plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
             result = _execute_tool_call(tool_name, arguments)
             results.append(result)
         except Exception as exc:
-            logger.exception("Tool execution failed before API result creation: %s", tool_name)
+            logger.exception(
+                "Tool execution failed before API result creation: %s",
+                tool_name,
+            )
             results.append(
                 {
                     "tool": tool_name or "unknown",
                     "data": {
                         "records": [],
                         "sample_records": [],
+                        "aggregates": {},
                         "response_metadata": {},
                     },
                     "arguments": arguments,
@@ -143,9 +147,17 @@ def _resolve_api_summary(
         result.get("execution_status") in {"success", "partial", "empty"}
         for result in tool_results
     )
+
+    # The new public APIs can return authoritative aggregate sections such as
+    # source_breakdown, location_breakdown, supply_by_source, and
+    # demand_by_source. Those aggregates count as live facts even if a response
+    # contains no raw records.
     api_facts_used = any(
         result.get("execution_status") in {"success", "partial"}
-        and int(result.get("record_count", 0) or 0) > 0
+        and (
+            int(result.get("record_count", 0) or 0) > 0
+            or _has_aggregate_data(result)
+        )
         for result in tool_results
     )
 
@@ -166,35 +178,52 @@ def _resolve_api_summary(
     summary = QueryApiSummary(
         context_type=context_type,
         planner_reason=str(plan.get("reason", "") or ""),
-        intent=str(analysis.get("intent", plan.get("intent", "none"))), # type: ignore
-        is_prediction=bool(plan.get("is_prediction", False)), # type: ignore
-        is_recommendation=bool(plan.get("is_recommendation", False)), # type: ignore
-        historical_period=_to_query_period(plan.get("historical_period")), # type: ignore
-        forecast_period=_to_query_period(plan.get("forecast_period")), # type: ignore
-        group_by=list(plan.get("group_by", []) or []), # type: ignore
-        metrics=list(plan.get("metrics", []) or []), # type: ignore
-        filters_used=filters_used, # type: ignore
-        records_analyzed=dict(analysis.get("records_analyzed", {}) or {}), # type: ignore
-        analytics_result=dict(analysis.get("analytics_result", {}) or {}), # type: ignore
-        prediction_result=analysis.get("prediction_result"), # type: ignore
-        recommendation_result=analysis.get("recommendation_result"), # type: ignore
-        confidence=analysis.get("confidence"), # type: ignore
-        limitations=list(analysis.get("limitations", []) or []), # type: ignore
-        missing_parameters=list(plan.get("missing_parameters", []) or []), # type: ignore
-        calculation_method=analysis.get("calculation_method"), # type: ignore
-        data_as_of=datetime.now(timezone.utc).isoformat(), # type: ignore
-        tool_results=compact_tool_results, # type: ignore
+        intent=str(analysis.get("intent", plan.get("intent", "none"))),  # type: ignore
+        is_prediction=bool(plan.get("is_prediction", False)),  # type: ignore
+        is_recommendation=bool(plan.get("is_recommendation", False)),  # type: ignore
+        historical_period=_to_query_period(plan.get("historical_period")),  # type: ignore
+        forecast_period=_to_query_period(plan.get("forecast_period")),  # type: ignore
+        group_by=list(plan.get("group_by", []) or []),  # type: ignore
+        metrics=list(plan.get("metrics", []) or []),  # type: ignore
+        filters_used=filters_used,  # type: ignore
+        records_analyzed=dict(analysis.get("records_analyzed", {}) or {}),  # type: ignore
+        analytics_result=dict(analysis.get("analytics_result", {}) or {}),  # type: ignore
+        prediction_result=analysis.get("prediction_result"),  # type: ignore
+        recommendation_result=analysis.get("recommendation_result"),  # type: ignore
+        confidence=analysis.get("confidence"),  # type: ignore
+        limitations=list(analysis.get("limitations", []) or []),  # type: ignore
+        missing_parameters=list(plan.get("missing_parameters", []) or []),  # type: ignore
+        calculation_method=analysis.get("calculation_method"),  # type: ignore
+        data_as_of=datetime.now(timezone.utc).isoformat(),  # type: ignore
+        tool_results=compact_tool_results,  # type: ignore
     )
 
     # Empty API responses are still useful operational context, but they do not
     # count as API facts. This lets the final answer say that no records matched.
     if successful_or_empty and not api_facts_used:
-        summary.limitations = _append_unique( # type: ignore
-            summary.limitations, # type: ignore
-            "No matching marketplace records were available for the requested scope.",
+        summary.limitations = _append_unique(  # type: ignore
+            summary.limitations,  # type: ignore
+            "No matching marketplace records or aggregate data were available "
+            "for the requested scope.",
         )
 
     return summary, api_facts_used, plan
+
+
+def _has_aggregate_data(result: Mapping[str, Any]) -> bool:
+    """Return True when a tool result contains a non-empty aggregate section."""
+    raw_data = result.get("data", {})
+    if not isinstance(raw_data, Mapping):
+        return False
+
+    aggregates = raw_data.get("aggregates", {})
+    if not isinstance(aggregates, Mapping):
+        return False
+
+    return any(
+        value not in (None, {}, [], "")
+        for value in aggregates.values()
+    )
 
 
 def _to_query_tool_result(result: Mapping[str, Any]) -> QueryToolResult:
@@ -202,13 +231,23 @@ def _to_query_tool_result(result: Mapping[str, Any]) -> QueryToolResult:
     raw_data = result.get("data", {})
     compact_data: Dict[str, Any] = {
         "sample_records": [],
+        "aggregates": {},
         "response_metadata": {},
     }
 
     if isinstance(raw_data, Mapping):
         samples = raw_data.get("sample_records", [])
         if isinstance(samples, list):
-            compact_data["sample_records"] = samples[: settings.ANALYTICS_LLM_SAMPLE_RECORDS]
+            compact_data["sample_records"] = samples[
+                : settings.ANALYTICS_LLM_SAMPLE_RECORDS
+            ]
+
+        # Preserve the normalized aggregate sections returned by the new public
+        # APIs. These are compact and useful for answer explanation, unlike the
+        # full raw records array, which remains excluded.
+        aggregates = raw_data.get("aggregates", {})
+        if isinstance(aggregates, Mapping):
+            compact_data["aggregates"] = dict(aggregates)
 
         metadata = raw_data.get("response_metadata", {})
         if isinstance(metadata, Mapping):
@@ -237,8 +276,8 @@ def _to_query_period(value: Any) -> Optional[QueryPeriod]:
         return None
 
     return QueryPeriod(
-        from_date=str(from_value) if from_value else None,
-        to_date=str(to_value) if to_value else None,
+        from_date=str(from_value) if from_value else None, # type: ignore
+        to_date=str(to_value) if to_value else None, # type: ignore
     )
 
 
@@ -289,7 +328,10 @@ def _build_sources(hits: Sequence[Mapping[str, Any]]) -> List[QuerySource]:
                     chunk_index=int(hit.get("chunk_index", 0) or 0),
                     s3_uri=str(hit.get("s3_uri", "") or ""),
                     score=float(hit.get("score", 0.0) or 0.0),
-                    snippet=str(hit.get("text", "") or "")[:280].replace("\n", " "),
+                    snippet=str(hit.get("text", "") or "")[:280].replace(
+                        "\n",
+                        " ",
+                    ),
                 )
             )
         except (TypeError, ValueError, ValidationError) as exc:
@@ -309,33 +351,37 @@ def _build_fallback_answer(
     generation_error: Exception,
 ) -> str:
     """Return a useful fallback when final LLM generation is unavailable."""
-    logger.warning("Building fallback answer after generation failure: %s", generation_error)
+    logger.warning(
+        "Building fallback answer after generation failure: %s",
+        generation_error,
+    )
 
-    if api_summary is not None: # type: ignore
-        if api_summary.missing_parameters: # type: ignore
-            missing = ", ".join(api_summary.missing_parameters) # type: ignore
+    if api_summary is not None:  # type: ignore
+        if api_summary.missing_parameters:  # type: ignore
+            missing = ", ".join(api_summary.missing_parameters)  # type: ignore
             return f"I need the following information to answer accurately: {missing}."
 
-        if api_summary.confidence == "insufficient_data": # type: ignore
-            limitations = " ".join(api_summary.limitations[:2]) # type: ignore
+        if api_summary.confidence == "insufficient_data":  # type: ignore
+            limitations = " ".join(api_summary.limitations[:2])  # type: ignore
             return (
                 "There is insufficient marketplace data for a reliable answer. "
                 f"{limitations}".strip()
             )
 
-        if api_summary.prediction_result: # type: ignore
+        if api_summary.prediction_result:  # type: ignore
             return (
                 "The prediction was calculated, but the language-generation service "
                 "is temporarily unavailable. Please retry shortly."
             )
 
-        if api_summary.recommendation_result: # type: ignore
+        if api_summary.recommendation_result:  # type: ignore
             return (
-                "The recommendation analysis was calculated, but the language-generation "
-                "service is temporarily unavailable. Please retry shortly."
+                "The recommendation analysis was calculated, but the "
+                "language-generation service is temporarily unavailable. "
+                "Please retry shortly."
             )
 
-        if api_summary.analytics_result: # type: ignore
+        if api_summary.analytics_result:  # type: ignore
             return (
                 "Marketplace analytics were calculated, but the language-generation "
                 "service is temporarily unavailable. Please retry shortly."
@@ -343,8 +389,9 @@ def _build_fallback_answer(
 
     if hits:
         return (
-            "Relevant knowledge-base information was found, but the answer-generation "
-            "service is temporarily unavailable. Please retry shortly."
+            "Relevant knowledge-base information was found, but the "
+            "answer-generation service is temporarily unavailable. "
+            "Please retry shortly."
         )
 
     return (
@@ -365,10 +412,31 @@ def _insufficient_response(
             + "."
         )
 
-    if api_summary and api_summary.limitations: # type: ignore
-        return " ".join(api_summary.limitations[:2]) # type: ignore
+    if api_summary and api_summary.limitations:  # type: ignore
+        return " ".join(api_summary.limitations[:2])  # type: ignore
 
     return "No matching marketplace or knowledge-base information was found."
+
+
+def _live_data_unavailable_response(
+    api_summary: Optional[QueryApiSummary],
+) -> str:
+    """
+    Return a grounded response when a live-data question has no usable API data.
+
+    Static RAG examples must never substitute for current or historical
+    marketplace facts, predictions, or recommendations.
+    """
+    if api_summary and api_summary.limitations:  # type: ignore
+        detail = " ".join(api_summary.limitations[:2])  # type: ignore
+    else:
+        detail = "The required public marketplace API returned no usable data."
+
+    return (
+        "Live marketplace data is unavailable for this question. "
+        "The answer was not generated from static RAG examples. "
+        f"{detail}"
+    )
 
 
 def _answer_mode(
@@ -396,6 +464,21 @@ def answer_question(request: QueryRequest) -> QueryResponse:
 
     # Plan and API execution do not depend on successful RAG retrieval.
     api_summary, api_facts_used, plan = _resolve_api_summary(request.question)
+
+    # New live-data safeguard: if the planner marks the question as requiring
+    # live marketplace data and the APIs return neither records nor aggregates,
+    # stop before RAG retrieval and answer generation. This prevents document
+    # examples from being presented as live marketplace facts.
+    if plan.get("requires_live_data", False) and not api_facts_used:
+        return QueryResponse(
+            answer=_live_data_unavailable_response(api_summary),
+            source_count=0,
+            sources=[],
+            answer_mode="insufficient_data",
+            api_facts_used=False,
+            api_summary=api_summary,
+        )
+
     hits = _retrieve_chunks(request.question, top_k)
     sources = _build_sources(hits)
 
@@ -430,7 +513,8 @@ def answer_question(request: QueryRequest) -> QueryResponse:
     mode = _answer_mode(bool(hits), api_summary, api_facts_used)
 
     logger.info(
-        "answer_question: top_k=%d sources=%d mode=%s api_facts_used=%s intent=%s",
+        "answer_question: top_k=%d sources=%d mode=%s "
+        "api_facts_used=%s intent=%s",
         top_k,
         len(sources),
         mode,
