@@ -103,6 +103,7 @@ INTENTS = {
     "supply_mix",
     "historical_supply",
     "historical_demand",
+    "demand_and_supply",
     "average_selling_price",
     "demand_supply_ratio",
     "market_balance",
@@ -163,6 +164,10 @@ REQUIRED_TOOLS_BY_INTENT = {
         "get_all_listings",
     ),
     "historical_demand": (
+        "get_all_purchases",
+    ),
+    "demand_and_supply": (
+        "get_all_listings",
         "get_all_purchases",
     ),
     "average_selling_price": (
@@ -502,6 +507,15 @@ historical_supply:
 historical_demand:
 - Must use get_all_purchases with status=COMPLETED.
 
+demand_and_supply:
+- Use when the question asks for demand and supply together for a source, location, or period.
+- Must use get_all_listings and get_all_purchases with identical source, location, and period filters.
+- Purchases must use status=COMPLETED.
+- Remaining supply comes from get_all_listings.
+- Sold supply and realized demand come from get_all_purchases.
+- Total supply equals remaining listing kWh plus completed purchase kWh.
+- Never use get_all_purchases alone for a demand-and-supply question.
+
 average_selling_price:
 - Must use get_all_purchases with status=COMPLETED.
 
@@ -617,6 +631,9 @@ Question: Compare demand for Biomass, Geothermal, and Tidal last month.
 Result: historical_demand, get_all_purchases, status COMPLETED, last-month dates.
 Do not apply one energy_source filter because multiple sources are compared.
 
+Question: What was the demand and supply for Solar credits during this period?
+Result: demand_and_supply, get_all_listings plus get_all_purchases, identical SOLAR and date filters, purchases status COMPLETED. Total supply is remaining listing kWh plus sold purchase kWh.
+
 Question: Which source had the highest average selling price last month?
 Result: average_selling_price, get_all_purchases, status COMPLETED, no source filter.
 
@@ -650,6 +667,7 @@ ALLOWED INTENTS:
 - supply_mix
 - historical_supply
 - historical_demand
+- demand_and_supply
 - average_selling_price
 - demand_supply_ratio
 - market_balance
@@ -1032,6 +1050,7 @@ def _enforce_required_plan_components(
         "supply_mix": ["energy_source"],
         "historical_supply": ["energy_source"],
         "historical_demand": ["energy_source"],
+        "demand_and_supply": ["energy_source"],
         "average_selling_price": ["energy_source"],
         "demand_supply_ratio": ["energy_source"],
         "market_balance": ["energy_source"],
@@ -1051,6 +1070,7 @@ def _enforce_required_plan_components(
         "supply_mix": ["energy_kwh"],
         "historical_supply": ["energy_kwh"],
         "historical_demand": ["energy_kwh", "purchase_count"],
+        "demand_and_supply": ["energy_kwh", "listing_count", "purchase_count"],
         "average_selling_price": ["price_per_kwh", "energy_kwh"],
         "demand_supply_ratio": ["energy_kwh", "demand_supply_ratio"],
         "market_balance": ["energy_kwh", "market_balance"],

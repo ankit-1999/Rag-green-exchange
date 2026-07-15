@@ -479,7 +479,7 @@ def answer_question(request: QueryRequest) -> QueryResponse:
             api_summary=api_summary,
         )
 
-    if str(plan.get("intent", "none")) == "marketplace_summary":
+    if str(plan.get("intent", "none")) in {"marketplace_summary", "demand_and_supply"}:
         hits: List[Dict[str, Any]] = []
     else:
         hits = _retrieve_chunks(request.question, top_k)

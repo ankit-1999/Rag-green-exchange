@@ -77,6 +77,7 @@ RECOMMENDATION_INTENTS = {
 ANALYTICS_INTENTS = {
     "historical_supply",
     "historical_demand",
+    "demand_and_supply",
     "average_selling_price",
     "demand_supply_ratio",
     "market_balance",
@@ -474,6 +475,22 @@ Create one ai-response section containing:
 Do not copy these instructions or placeholders into the response.
 """.strip()
 
+    if intent == "demand_and_supply":
+        return """
+Create one ai-response section containing:
+1. An ai-hero ai-info block titled &#128200; Demand and supply with the direct
+   answer for the requested source, location, and period.
+2. An ai-section titled Key metrics with a proper ai-table. For a single-source
+   question, include only that requested source. Use these columns: Source,
+   Remaining supply, Sold supply, Total supply, and Realized demand.
+3. State that Total supply equals Remaining supply plus Sold supply.
+4. An ai-section titled Period and method with exact supplied dates and the
+   deterministic calculation method.
+5. An ai-note only when supplied limitations exist.
+Do not include unrelated sources when an energy_source filter is present. Do not
+show a value from another source. Do not copy these instructions into the answer.
+""".strip()
+
     if intent == "marketplace_summary":
         return """
 Create one ai-response section containing:
@@ -559,8 +576,11 @@ GROUNDING PRIORITY:
 
 FACT DEFINITIONS:
 - Current available supply means active available listing energy_kwh.
-- Historical listed supply means listing energy_kwh created in the stated period.
-- Realized demand means energy_kwh from completed purchases.
+- Remaining supply means unsold credit kWh returned by get_all_listings for the scope.
+- Sold supply means credit kWh returned by completed get_all_purchases.
+- Total supply means remaining listing kWh plus sold completed-purchase kWh.
+- Realized demand means sold energy_kwh from completed purchases.
+- Historical listed supply alone is not total supply because sold credits no longer appear in get_all_listings.
 - Average selling price means volume-weighted realized price unless the supplied
   calculation explicitly states another validated method.
 - Demand-to-supply ratio means completed demand kWh divided by listed supply kWh

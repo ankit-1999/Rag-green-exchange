@@ -112,6 +112,19 @@ def analyze_plan(
             calculation_method = "completed purchase kWh grouped by source"
             confidence = _descriptive_confidence(datasets["purchases"], limitations, aggregates["purchases"])
 
+        elif intent == "demand_and_supply":
+            analytics_result = _demand_and_supply(
+                datasets["all_listings"],
+                datasets["purchases"],
+                aggregates["all_listings"],
+                aggregates["purchases"],
+            )
+            calculation_method = (
+                "total supply = remaining listing kWh + sold completed-purchase kWh; "
+                "realized demand = completed-purchase kWh"
+            )
+            confidence = _combined_descriptive_confidence(datasets, limitations, aggregates)
+
         elif intent == "average_selling_price":
             analytics_result = _average_selling_price(datasets["purchases"], aggregates["purchases"])
             calculation_method = "volume-weighted completed selling price by source"
@@ -490,6 +503,52 @@ def _average_selling_price(records: Sequence[Mapping[str, Any]], aggregates: Map
     valid = {source: value for source, value in prices.items() if value is not None}
     winner, value = _max_item(valid)
     return {"weighted_average_selling_price_by_source": {source: _round(price, 8) for source, price in prices.items()}, "sold_volume_kwh_by_source": volumes, "highest_average_price_source": winner, "highest_average_price_per_kwh": _round(value, 8), "price_basis": "completed purchase volume-weighted realized price"}
+
+
+def _demand_and_supply(
+    listings: Sequence[Mapping[str, Any]],
+    purchases: Sequence[Mapping[str, Any]],
+    listing_aggregates: Mapping[str, Any],
+    purchase_aggregates: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Calculate remaining supply, sold supply/demand, and total issued supply.
+
+    GreenGrid API semantics:
+    - get_all_listings contains credits that remain unsold for the scope.
+    - get_all_purchases contains sold credits.
+    - total supply therefore equals remaining listing kWh plus sold kWh.
+    - realized demand equals sold/completed purchase kWh.
+    """
+    remaining_supply = _listed_totals(listings, listing_aggregates)
+    sold_supply_and_demand = _demand_totals(purchases, purchase_aggregates)
+    total_supply = {
+        source: _round(remaining_supply[source] + sold_supply_and_demand[source]) or 0.0
+        for source in SUPPORTED_SOURCES
+    }
+    remaining_share = {
+        source: _round((remaining_supply[source] / total_supply[source]) * 100, 2) if total_supply[source] > 0 else 0.0
+        for source in SUPPORTED_SOURCES
+    }
+    sold_share = {
+        source: _round((sold_supply_and_demand[source] / total_supply[source]) * 100, 2) if total_supply[source] > 0 else 0.0
+        for source in SUPPORTED_SOURCES
+    }
+    leader, leader_value = _positive_max_item(total_supply)
+    demand_leader, demand_leader_value = _positive_max_item(sold_supply_and_demand)
+    return {
+        "remaining_supply_kwh_by_source": remaining_supply,
+        "sold_supply_kwh_by_source": sold_supply_and_demand,
+        "realized_demand_kwh_by_source": sold_supply_and_demand,
+        "total_supply_kwh_by_source": total_supply,
+        "remaining_supply_percentage_by_source": remaining_share,
+        "sold_percentage_by_source": sold_share,
+        "highest_total_supply_source": leader,
+        "highest_total_supply_kwh": _round(leader_value),
+        "highest_demand_source": demand_leader,
+        "highest_demand_kwh": _round(demand_leader_value),
+        "supply_definition": "total supply = remaining credits from get_all_listings + sold credits from completed get_all_purchases",
+        "demand_definition": "realized demand = sold credits from completed purchases",
+    }
 
 
 def _demand_supply_ratio(listings, purchases, listing_aggregates, purchase_aggregates) -> Dict[str, Any]:
