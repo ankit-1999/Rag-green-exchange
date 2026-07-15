@@ -479,7 +479,10 @@ def answer_question(request: QueryRequest) -> QueryResponse:
             api_summary=api_summary,
         )
 
-    hits = _retrieve_chunks(request.question, top_k)
+    if str(plan.get("intent", "none")) == "marketplace_summary":
+        hits: List[Dict[str, Any]] = []
+    else:
+        hits = _retrieve_chunks(request.question, top_k)
     sources = _build_sources(hits)
 
     if not hits and api_summary is None:

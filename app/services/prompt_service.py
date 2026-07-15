@@ -83,6 +83,7 @@ ANALYTICS_INTENTS = {
     "supply_stability",
     "price_volatility",
     "supply_by_location",
+    "marketplace_summary",
 }
 
 ALLOWED_HTML_TAGS = (
@@ -471,6 +472,28 @@ Create one ai-response section containing:
 5. An ai-note ai-warning block containing supplied limitations and stating that
    the result is decision support, not a guarantee or financial advice.
 Do not copy these instructions or placeholders into the response.
+""".strip()
+
+    if intent == "marketplace_summary":
+        return """
+Create one ai-response section containing:
+1. An ai-hero ai-info block titled &#128200; Marketplace summary with a concise
+   statement of current active supply, active listing count, today's completed
+   demand, and the leading source.
+2. An ai-grid with cards for Active supply, Active listings, New supply today,
+   and Completed demand today.
+3. An ai-section titled Supply by renewable source containing one proper
+   ai-table with exactly these columns: Source, Active listings, Available
+   supply, Market share, Average asking price, New supply today, Completed
+   demand today, and Average realized price. Include all supported sources.
+4. An ai-section titled Today's activity containing a proper ai-table for new
+   listings, newly listed kWh, completed purchases, completed demand kWh, and
+   realized price information supplied in API_CONTEXT.
+5. An ai-section titled Location highlights containing only supplied top-supply
+   and top-demand locations.
+6. An ai-note ai-neutral block with the supplied data date or as-of timestamp.
+Do not create a per-source table where Total Active Supply and Highest Supply
+are repeated in every row. Do not copy these instructions into the response.
 """.strip()
 
     if intent in ANALYTICS_INTENTS:
