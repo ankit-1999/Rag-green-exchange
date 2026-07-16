@@ -158,7 +158,7 @@ class Settings:
     )
     BEDROCK_LLM_MAX_TOKENS = _int(
         "BEDROCK_LLM_MAX_TOKENS",
-        1400,
+        3200,
         128,
         4096,
     )

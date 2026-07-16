@@ -17,6 +17,7 @@ Flow:
 
 from __future__ import annotations
 
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -458,6 +459,84 @@ def _answer_mode(
 # ---------------------------------------------------------------------------
 
 
+def _append_collapsible_sources(
+    answer: str,
+    sources: Sequence[QuerySource],
+    api_summary: Optional[QueryApiSummary],
+) -> str:
+    """Append one collapsible source section after the complete answer."""
+    document_names: List[str] = []
+    for source in sources:
+        name = str(getattr(source, "document_name", "") or "").strip()
+        if name and name not in document_names:
+            document_names.append(name)
+
+    tool_names: List[str] = []
+    if api_summary is not None:
+        for result in list(getattr(api_summary, "tool_results", []) or []):
+            name = str(getattr(result, "tool", "") or "").strip()
+            if name and name not in tool_names:
+                tool_names.append(name)
+
+    if not document_names and not tool_names:
+        return answer
+
+    sections: List[str] = []
+    if document_names:
+        document_items = "".join(
+            (
+                '<li style="box-sizing:border-box;margin:0;padding:0;">'
+                f'&#128196; {html.escape(name)}'
+                "</li>"
+            )
+            for name in document_names
+        )
+        sections.append(
+            '<div style="box-sizing:border-box;display:flex;flex-direction:column;gap:6px;">'
+            '<strong style="box-sizing:border-box;">Documents</strong>'
+            '<ul style="box-sizing:border-box;margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px;">'
+            f"{document_items}</ul></div>"
+        )
+
+    if tool_names:
+        tool_items = "".join(
+            (
+                '<li style="box-sizing:border-box;margin:0;padding:0;">'
+                f'&#127760; {html.escape(name)}'
+                "</li>"
+            )
+            for name in tool_names
+        )
+        sections.append(
+            '<div style="box-sizing:border-box;display:flex;flex-direction:column;gap:6px;">'
+            '<strong style="box-sizing:border-box;">Marketplace Data</strong>'
+            '<ul style="box-sizing:border-box;margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px;">'
+            f"{tool_items}</ul></div>"
+        )
+
+    disclosure = (
+        '<details style="box-sizing:border-box;width:100%;max-width:100%;margin-top:14px;'
+        'padding:10px 12px;border:1px solid #dbe3ef;border-radius:10px;'
+        'background:#f8fafc;color:#334155;">'
+        '<summary style="box-sizing:border-box;cursor:pointer;font-weight:700;'
+        'list-style-position:inside;">&#128204; Sources Used</summary>'
+        '<div style="box-sizing:border-box;display:flex;flex-direction:column;gap:12px;'
+        'margin-top:10px;">'
+        + "".join(sections)
+        + "</div></details>"
+    )
+    return f"{answer.rstrip()}\n{disclosure}"
+
+
+def _clear_embedded_source_metadata(
+    api_summary: Optional[QueryApiSummary],
+) -> Optional[QueryApiSummary]:
+    """Avoid duplicate legacy source rendering after HTML embedding."""
+    if api_summary is not None:
+        api_summary.tool_results = []  # type: ignore
+    return api_summary
+
+
 def answer_question(request: QueryRequest) -> QueryResponse:
     """Run the complete GreenGrid grounded-answer pipeline."""
     top_k = request.top_k or settings.OPENSEARCH_TOP_K
@@ -513,13 +592,21 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         logger.warning("Final answer generation unavailable: %s", exc)
         answer = _build_fallback_answer(api_summary, hits, exc)
 
+    answer = _append_collapsible_sources(
+        answer,
+        sources,
+        api_summary,
+    )
+    embedded_source_count = len(sources)
+    api_summary = _clear_embedded_source_metadata(api_summary)
+
     mode = _answer_mode(bool(hits), api_summary, api_facts_used)
 
     logger.info(
         "answer_question: top_k=%d sources=%d mode=%s "
         "api_facts_used=%s intent=%s",
         top_k,
-        len(sources),
+        embedded_source_count,
         mode,
         api_facts_used,
         plan.get("intent", "none"),
@@ -527,8 +614,8 @@ def answer_question(request: QueryRequest) -> QueryResponse:
 
     return QueryResponse(
         answer=answer,
-        source_count=len(sources),
-        sources=sources,
+        source_count=0,
+        sources=[],
         answer_mode=mode,
         api_facts_used=api_facts_used,
         api_summary=api_summary,

@@ -106,6 +106,8 @@ ALLOWED_HTML_TAGS = (
     "tr",
     "th",
     "td",
+    "details",
+    "summary",
 )
 
 ALLOWED_HTML_CLASSES = (
@@ -429,7 +431,8 @@ TABLE RULES:
 - When a general source comparison is requested, include all supported sources:
   {_supported_sources_text()}.
 - If a supported source has no value, show 0 for quantities or percentages and
-  Not available for unavailable prices or predictions.
+    show 0 for known zero quantities or percentages. If a cell has no supplied
+    value, display a single dash: -. Never display null or Not available.
 
 VISIBLE-CONTENT RULES:
 - Never emit instructional placeholder text such as "Lead with...", "Use this
@@ -684,8 +687,10 @@ STRICT CONTENT RULES:
 - If limitations is empty, omit the limitations section completely. Never write
     "No limitations exist" or similar filler.
 - Use human-readable source labels: {_supported_sources_text()}.
-- Do not put document names or API tool names in the answer unless explicitly
-  requested; the client renders sources and API usage separately.
+- Do not generate a Sources Used section, document names, chunk names, or API
+    tool names. rag_service appends one collapsible Sources section after the
+    complete answer fragment. Finish and close every section, div, table, thead,
+    tbody, tr, th, and td before the response ends.
 
 {_html_design_system()}
 
@@ -703,6 +708,8 @@ RAG_CONTEXT:
 
 Return only the safe, self-contained HTML fragment. Every visual element must
 include its responsive inline style because the frontend only assigns the answer
-to div.innerHTML. Do not return Markdown, JSON, code fences, a full HTML
-document, a style block, or explanatory text outside the fragment.
+to div.innerHTML. The fragment must be structurally complete and all tags must
+be closed. Never place source information inside a table. Do not return
+Markdown, JSON, code fences, a full HTML document, a style block, or
+explanatory text outside the fragment.
 """.strip()

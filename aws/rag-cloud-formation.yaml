@@ -16,6 +16,10 @@ Parameters:
     Type: String
     Default: 'https://github.com/ankit-1999/Rag-green-exchange.git'
     Description: GitHub repository URL for the application
+
+  ACMCertificateArn:
+    Type: String
+    Description: ACM certificate ARN for HTTPS on the ALB (must be in same region)
   
   AWSRegion:
     Type: String
@@ -36,6 +40,7 @@ Metadata:
           - POCExpirationDate
           - AWSRegion
           - GitHubRepository
+          - ACMCertificateArn
     ParameterLabels:
       Environment:
         default: "Environment Name"
@@ -45,6 +50,8 @@ Metadata:
         default: "AWS Region (ap-southeast-1 recommended for India)"
       GitHubRepository:
         default: "GitHub Repository URL"
+      ACMCertificateArn:
+        default: "ACM Certificate ARN"
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -75,6 +82,17 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub 'greengrid-public-subnet-${Environment}'
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GreenGridVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-public-subnet-2-${Environment}'
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -111,6 +129,37 @@ Resources:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
+  SubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Group for Application Load Balancer
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for GreenGrid public ALB
+      VpcId: !Ref GreenGridVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP to ALB (redirects to HTTPS)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to ALB
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-alb-sg-${Environment}'
+
   # Security Group for EC2
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -126,8 +175,8 @@ Resources:
         - IpProtocol: tcp
           FromPort: 8000
           ToPort: 8000
-          CidrIp: 0.0.0.0/0
-          Description: FastAPI application
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: FastAPI application from ALB only
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -338,6 +387,70 @@ Resources:
         - Key: ExpiresOn
           Value: !Ref POCExpirationDate
 
+  # ---------------------------------------------------------------------------
+  # Application Load Balancer (HTTPS)
+  # ---------------------------------------------------------------------------
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'greengrid-alb-${Environment}'
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub 'greengrid-alb-${Environment}'
+        - Key: ExpiresOn
+          Value: !Ref POCExpirationDate
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'greengrid-api-tg-${Environment}'
+      VpcId: !Ref GreenGridVPC
+      Protocol: HTTP
+      Port: 8000
+      TargetType: instance
+      Targets:
+        - Id: !Ref EC2Instance
+          Port: 8000
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      Matcher:
+        HttpCode: '200-399'
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref ACMCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+
   # Service-linked role for OpenSearch (required)
   OpenSearchServiceLinkedRole:
     Type: AWS::IAM::ServiceLinkedRole
@@ -481,14 +594,14 @@ Outputs:
       Name: !Sub '${Environment}-EC2-PublicIP'
 
   ApiEndpoint:
-    Description: FastAPI application endpoint
-    Value: !Sub 'http://${EC2Instance.PublicDnsName}:8000'
+    Description: FastAPI application endpoint over HTTPS
+    Value: !Sub 'https://${ApplicationLoadBalancer.DNSName}'
     Export:
       Name: !Sub '${Environment}-API-Endpoint'
 
   ApiDocsEndpoint:
-    Description: Swagger UI endpoint
-    Value: !Sub 'http://${EC2Instance.PublicDnsName}:8000/docs'
+    Description: Swagger UI endpoint over HTTPS
+    Value: !Sub 'https://${ApplicationLoadBalancer.DNSName}/docs'
     Export:
       Name: !Sub '${Environment}-API-Docs'
 
