@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>GreenGrid AI Assistant</title>
+
+<style>
+:root{
+    --primary:#2563eb;
+    --bg:#f5f7fb;
+    --card:#ffffff;
+    --text:#111827;
+    --border:#e5e7eb;
+    --chip:#e8f0fe;
+    --chip-text:#2563eb;
+}
+
+body.dark{
+    --bg:#0f172a;
+    --card:#1e293b;
+    --text:#f8fafc;
+    --border:#334155;
+    --chip:#334155;
+    --chip-text:#93c5fd;
+}
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+    font-family: Inter,Segoe UI,Arial,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    height:100vh;
+    display:flex;
+    flex-direction:column;
+    transition:.3s;
+}
+
+header{
+    height:70px;
+    background:linear-gradient(135deg,#2563eb,#4f46e5);
+    color:white;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:0 20px;
+    box-shadow:0 4px 12px rgba(0,0,0,.15);
+}
+
+.logo{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    font-size:22px;
+    font-weight:700;
+}
+
+.theme-btn{
+    border:none;
+    background:rgba(255,255,255,.2);
+    color:white;
+    width:42px;
+    height:42px;
+    border-radius:50%;
+    cursor:pointer;
+    font-size:18px;
+}
+
+.chat-container{
+    flex:1;
+    overflow-y:auto;
+    padding:25px;
+}
+
+.message{
+    display:flex;
+    gap:12px;
+    margin-bottom:25px;
+    animation:fadeIn .3s ease;
+}
+
+.user{
+    flex-direction:row-reverse;
+}
+
+.avatar{
+    width:42px;
+    height:42px;
+    border-radius:50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-shrink:0;
+    font-size:20px;
+}
+
+.ai-avatar{
+    background:#2563eb;
+    color:white;
+}
+
+.user-avatar{
+    background:#10b981;
+    color:white;
+}
+
+.bubble{
+    max-width:80%;
+    padding:16px;
+    border-radius:16px;
+    background:var(--card);
+    border:1px solid var(--border);
+    box-shadow:0 2px 8px rgba(0,0,0,.05);
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    overflow-wrap:anywhere;
+}
+
+.user .bubble{
+    background:#2563eb;
+    color:white;
+}
+
+.answer-content{
+    line-height:1.7;
+    width:100%;
+    min-width:0;
+}
+
+.answer-content ul{
+    margin-left:20px;
+    margin-top:8px;
+}
+
+.answer-content p{
+    margin-bottom:10px;
+}
+
+.input-area{
+    background:var(--card);
+    border-top:1px solid var(--border);
+    padding:20px;
+}
+
+.input-wrapper{
+    max-width:1200px;
+    margin:auto;
+    display:flex;
+    gap:12px;
+    align-items:flex-end;
+}
+
+textarea{
+    flex:1;
+    resize:none;
+    border:1px solid var(--border);
+    border-radius:20px;
+    padding:14px;
+    min-height:55px;
+    max-height:180px;
+    overflow-y:auto;
+    background:var(--card);
+    color:var(--text);
+    font-size:15px;
+}
+
+.send-btn{
+    width:55px;
+    height:55px;
+    border:none;
+    border-radius:50%;
+    background:var(--primary);
+    color:white;
+    cursor:pointer;
+    font-size:20px;
+}
+
+.typing{
+    display:flex;
+    gap:4px;
+}
+
+.typing span{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:#64748b;
+    animation:bounce 1.4s infinite;
+}
+
+.typing span:nth-child(2){
+    animation-delay:.2s;
+}
+
+.typing span:nth-child(3){
+    animation-delay:.4s;
+}
+
+.time{
+    margin-top:4px;
+    display:block;
+    width:100%;
+    text-align:right;
+    flex-shrink:0;
+    clear:both;
+    font-size:11px;
+    opacity:.6;
+}
+
+.welcome{
+    text-align:center;
+    margin-top:80px;
+    opacity:.8;
+}
+
+.welcome h1{
+    margin-bottom:10px;
+}
+
+@keyframes bounce{
+    0%,80%,100%{
+        transform:scale(0);
+    }
+    40%{
+        transform:scale(1);
+    }
+}
+
+@keyframes fadeIn{
+    from{
+        opacity:0;
+        transform:translateY(10px);
+    }
+    to{
+        opacity:1;
+        transform:translateY(0);
+    }
+}
+
+@media(max-width:768px){
+    .bubble{
+        max-width:95%;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <div class="logo">
+        🤖 GreenGrid AI
+    </div>
+
+    <button id="themeBtn" class="theme-btn">
+        🌙
+    </button>
+</header>
+
+<div id="chatContainer" class="chat-container">
+
+    <div class="welcome">
+        <h1>GreenGrid AI Assistant</h1>
+        <p>Ask questions about marketplace data, credits and knowledge documents.</p>
+    </div>
+
+</div>
+
+<div class="input-area">
+
+    <div class="input-wrapper">
+
+        <textarea
+            id="questionInput"
+            placeholder="Message GreenGrid AI..."
+            rows="1"></textarea>
+
+        <button class="send-btn" onclick="sendQuestion()">
+            ➤
+        </button>
+
+    </div>
+
+</div>
+
+<script>
+
+const API_URL =
+'https://d2iofwozlvn5we.cloudfront.net/query';
+
+const chatContainer =
+document.getElementById('chatContainer');
+
+const textarea =
+document.getElementById('questionInput');
+
+textarea.addEventListener('input', () => {
+    textarea.style.height='auto';
+    textarea.style.height =
+    textarea.scrollHeight + 'px';
+});
+
+textarea.addEventListener('keydown', function(e){
+
+    if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        sendQuestion();
+    }
+
+});
+
+document.getElementById("themeBtn")
+.addEventListener("click", () => {
+    document.body.classList.toggle("dark");
+});
+
+function getTime(){
+    return new Date()
+    .toLocaleTimeString([],{
+        hour:'2-digit',
+        minute:'2-digit'
+    });
+}
+
+function addMessage(content,type,isHtml=false){
+
+    document.querySelector('.welcome')?.remove();
+
+    const wrapper =
+    document.createElement('div');
+
+    wrapper.className =
+    `message ${type}`;
+
+    const avatar =
+    type === 'user'
+    ? '🧑'
+    : '🤖';
+
+    wrapper.innerHTML=`
+    <div class="avatar ${
+        type === 'user'
+        ? 'user-avatar'
+        : 'ai-avatar'
+    }">
+        ${avatar}
+    </div>
+
+    <div class="bubble">
+
+        <div class="answer-content">
+            ${
+                isHtml
+                ? content
+                : escapeHtml(content)
+            }
+        </div>
+
+        <div class="time">
+            ${getTime()}
+        </div>
+
+    </div>`;
+
+    chatContainer.appendChild(wrapper);
+
+    scrollBottom();
+
+    return wrapper;
+}
+
+function addTyping(){
+
+    const wrapper =
+    document.createElement('div');
+
+    wrapper.className='message';
+    wrapper.id='typingIndicator';
+
+    wrapper.innerHTML=`
+    <div class="avatar ai-avatar">
+        🤖
+    </div>
+
+    <div class="bubble">
+        <div class="typing">
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+    </div>`;
+
+    chatContainer.appendChild(wrapper);
+
+    scrollBottom();
+}
+
+function removeTyping(){
+    document
+    .getElementById('typingIndicator')
+    ?.remove();
+}
+
+function escapeHtml(text){
+
+    const div =
+    document.createElement('div');
+
+    div.innerText = text;
+
+    return div.innerHTML;
+}
+
+function scrollBottom(){
+    chatContainer.scrollTop =
+    chatContainer.scrollHeight;
+}
+
+async function sendQuestion(){
+
+    const question =
+    textarea.value.trim();
+
+    if(!question) return;
+
+    addMessage(question,'user');
+
+    textarea.value='';
+    textarea.style.height='55px';
+
+    addTyping();
+
+    try{
+
+        const response =
+        await fetch(API_URL,{
+
+            method:'POST',
+
+            headers:{
+                'accept':'application/json',
+                'Content-Type':'application/json'
+            },
+
+            body:JSON.stringify({
+                question,
+                top_k:5
+            })
+
+        });
+
+        const data =
+        await response.json();
+
+        removeTyping();
+
+        renderResponse(data);
+
+    }
+    catch(error){
+
+        removeTyping();
+
+        addMessage(
+            `<span style="color:red">
+            Error: ${error.message}
+            </span>`,
+            'assistant',
+            true
+        );
+    }
+}
+
+function renderResponse(data){
+    // LLM already returns HTML
+    const answerHTML =
+        window.DOMPurify
+            ? DOMPurify.sanitize(data.answer || '')
+            : (data.answer || '');
+
+    addMessage(
+        answerHTML,
+        'assistant',
+        true
+    );
+}
+</script>
+
+</body>
+</html>

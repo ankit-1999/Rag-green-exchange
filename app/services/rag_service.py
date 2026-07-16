@@ -18,6 +18,7 @@ Flow:
 from __future__ import annotations
 
 import html
+from html.parser import HTMLParser
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -596,12 +597,12 @@ def _render_marketplace_summary_html(
 
 def _summary_period_label(period_from: str, period_to: str, is_today: bool) -> str:
     if is_today:
-        return "Today's"
+        return "Today"
     if period_from and period_from == period_to:
         return period_from
     if period_from and period_to:
         return f"{period_from} to {period_to}"
-    return "Marketplace"
+    return "Current"
 
 
 def _marketplace_interpretation(
@@ -713,6 +714,187 @@ def _positive_leader(values: Any) -> Optional[str]:
         if (number := _number_or_none(value)) is not None and number > 0
     ]
     return max(valid, key=lambda item: item[1])[0] if valid else None
+
+
+_VOID_TAGS = {
+    "br",
+    "hr",
+    "img",
+    "input",
+    "meta",
+    "link",
+    "source",
+    "area",
+    "base",
+    "col",
+    "embed",
+    "param",
+    "track",
+    "wbr",
+}
+
+
+class _FragmentBalanceParser(HTMLParser):
+    """Track whether an HTML fragment ends with all non-void tags closed."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: List[str] = []
+        self.invalid = False
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        del attrs
+        if tag not in _VOID_TAGS:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: Any) -> None:
+        del tag
+        del attrs
+        return
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VOID_TAGS:
+            return
+        if not self.stack or self.stack[-1] != tag:
+            self.invalid = True
+            return
+        self.stack.pop()
+
+
+def _is_complete_html_fragment(value: str) -> bool:
+    """Reject truncated or structurally unbalanced LLM HTML."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parser = _FragmentBalanceParser()
+    try:
+        parser.feed(value)
+        parser.close()
+    except Exception:
+        return False
+    return not parser.invalid and not parser.stack and value.rstrip().endswith(">")
+
+
+def _render_seller_recommendation_html(api_summary: QueryApiSummary) -> str:
+    """Render seller recommendations deterministically and completely."""
+    recommendation = dict(api_summary.recommendation_result or {})
+    confidence = str(api_summary.confidence or "insufficient_data")
+    source = recommendation.get("recommended_source")
+    no_preference = bool(recommendation.get("no_strong_preference", False))
+    scores = recommendation.get("scores_by_source", {}) or {}
+    factors = recommendation.get("factors_by_source", {}) or {}
+
+    if confidence == "insufficient_data":
+        finding = (
+            "There is insufficient completed marketplace history for a reliable listing recommendation."
+        )
+    elif no_preference or not source:
+        finding = (
+            "The available marketplace evidence does not show a strong preference "
+            "for one renewable source."
+        )
+    else:
+        finding = (
+            f"{str(source).title()} has the strongest current listing opportunity "
+            "based on the supplied marketplace factors."
+        )
+
+    rows = []
+    for energy_source in settings.SUPPORTED_ENERGY_SOURCES:
+        source_factors = factors.get(energy_source, {}) if isinstance(factors, Mapping) else {}
+        rows.append(
+            [
+                energy_source.title(),
+                _display_value(scores.get(energy_source), ""),
+                _display_value(source_factors.get("active_supply_kwh"), "kWh"),
+                _display_value(source_factors.get("demand_supply_ratio"), ""),
+                _display_value(source_factors.get("weighted_realized_price"), ""),
+            ]
+        )
+
+    table = _responsive_table(
+        headers=[
+            "Source",
+            "Opportunity score",
+            "Active supply",
+            "Demand-to-supply ratio",
+            "Realized price",
+        ],
+        rows=rows,
+    )
+    data_as_of = str(api_summary.data_as_of or "")[:10]
+    limitations = list(api_summary.limitations or [])
+    limitation_html = ""
+    if limitations:
+        limitation_html = (
+            '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;'
+            'background:#fffbeb;color:#92400e;font-size:13px;">'
+            + html.escape(" ".join(limitations))
+            + "</div>"
+        )
+
+    return (
+        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;'
+        'flex-direction:column;gap:14px;color:#172033;font-family:Arial,Helvetica,sans-serif;'
+        'font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
+        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#f0fdf4;'
+        'border-left:4px solid #16a34a;">'
+        '<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">&#10024; Recommendation</h3>'
+        f'<p style="box-sizing:border-box;margin:0;">{html.escape(finding)}</p></div>'
+        '<section style="box-sizing:border-box;width:100%;">'
+        '<h4 style="box-sizing:border-box;margin:0 0 8px;font-size:15px;">Supporting metrics</h4>'
+        f"{table}</section>"
+        '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;'
+        f'color:#475569;font-size:13px;">Confidence: {html.escape(confidence.replace("_", " ").title())}'
+        + (f' | Data as of: {html.escape(data_as_of)}' if len(data_as_of) == 10 else "")
+        + "</div>"
+        + limitation_html
+        + "</section>"
+    )
+
+
+def _human_label(value: str) -> str:
+    return value.replace("_", " ").strip().title()
+
+
+def _scalar_display(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return str(value)
+
+
+def _render_complete_api_fallback(api_summary: QueryApiSummary) -> str:
+    """Return complete responsive HTML when any LLM fragment is truncated."""
+    intent = str(api_summary.intent or "analytics")
+    analytics = dict(api_summary.analytics_result or {})
+    prediction = api_summary.prediction_result
+    recommendation = api_summary.recommendation_result
+
+    if intent == "seller_recommendation":
+        return _render_seller_recommendation_html(api_summary)
+
+    payload = recommendation or prediction or analytics
+    rows: List[List[str]] = []
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                rows.append([_human_label(str(key)), _scalar_display(value)])
+
+    table = _responsive_table(["Metric", "Value"], rows) if rows else ""
+    data_as_of = str(api_summary.data_as_of or "")[:10]
+    return (
+        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;'
+        'flex-direction:column;gap:14px;color:#172033;font-family:Arial,Helvetica,sans-serif;'
+        'font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
+        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#eff6ff;'
+        'border-left:4px solid #2563eb;">'
+        f'<h3 style="box-sizing:border-box;margin:0;font-size:18px;">{html.escape(_human_label(intent))}</h3></div>'
+        + (f'<section style="box-sizing:border-box;width:100%;">{table}</section>' if table else "")
+        + '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;'
+        f'color:#475569;font-size:13px;">Data as of: {html.escape(data_as_of) if len(data_as_of) == 10 else "-"}</div>'
+        "</section>"
+    )
 
 
 def _append_collapsible_sources(
@@ -840,14 +1022,22 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         ),
     )
 
-    if str(plan.get("intent", "none")) == "marketplace_summary" and api_summary is not None:
-        # Deterministic rendering avoids LLM truncation for large inline-styled tables.
+    intent = str(plan.get("intent", "none"))
+    if intent == "marketplace_summary" and api_summary is not None:
         answer = _render_marketplace_summary_html(api_summary)
+    elif intent == "seller_recommendation" and api_summary is not None:
+        answer = _render_seller_recommendation_html(api_summary)
     else:
         try:
             answer = bedrock_service.generate_answer(prompt)
             if not answer.strip():
                 raise RuntimeError("Bedrock returned an empty answer.")
+            if not _is_complete_html_fragment(answer):
+                if api_summary is not None:
+                    logger.warning("Replacing incomplete LLM HTML for intent=%s", intent)
+                    answer = _render_complete_api_fallback(api_summary)
+                else:
+                    raise RuntimeError("Bedrock returned incomplete HTML.")
         except (RuntimeError, ValueError) as exc:
             logger.warning("Final answer generation unavailable: %s", exc)
             answer = _build_fallback_answer(api_summary, hits, exc)
