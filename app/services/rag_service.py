@@ -504,6 +504,190 @@ def _requested_sources(api_summary: QueryApiSummary) -> List[str]:
     return result
 
 
+def _insufficient_answer(title: str, message: str, api_summary: Optional[QueryApiSummary]) -> str:
+    data_as_of = str(getattr(api_summary, "data_as_of", "") or "")[:10] if api_summary else ""
+    note = (
+        '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;'
+        f'color:#475569;font-size:13px;">Data as of: {html.escape(data_as_of)}</div>'
+        if len(data_as_of) == 10 else ""
+    )
+    return (
+        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;flex-direction:column;gap:14px;'
+        'color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
+        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#fffbeb;border-left:4px solid #d97706;">'
+        f'<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">{html.escape(title)}</h3>'
+        f'<p style="box-sizing:border-box;margin:0;">{html.escape(message)}</p></div>{note}</section>'
+    )
+
+
+def _prediction_has_result(api_summary: QueryApiSummary, keys: Sequence[str]) -> bool:
+    result = api_summary.prediction_result
+    if not isinstance(result, Mapping):
+        return False
+    return any(result.get(key) not in (None, "", []) for key in keys)
+
+
+def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
+    source = _filter_argument(api_summary, "energy_source") or "renewable"
+    location = _filter_argument(api_summary, "location")
+    if not _prediction_has_result(api_summary, ("predicted_highest_demand_kwh", "predicted_demand_kwh", "forecast_by_source")):
+        scope = f"{source.title()} credits" + (f" in {location}" if location else "")
+        return _insufficient_answer(
+            "Demand prediction unavailable",
+            f"Due to insufficient historical purchase records and demand forecasting data for {scope}, I cannot predict next month's demand.",
+            api_summary,
+        )
+    return _render_complete_api_fallback(api_summary)
+
+
+def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
+    source = (_filter_argument(api_summary, "energy_source") or "renewable").title()
+    location = _filter_argument(api_summary, "location") or "the requested location"
+    if not _prediction_has_result(api_summary, ("shortage_expected", "projected_gap_kwh")):
+        return _insufficient_answer(
+            "Shortage prediction unavailable",
+            f"Due to insufficient predictive data regarding new supply and future demand for {source} credits in {location}, I cannot determine if there will be a shortage next month.",
+            api_summary,
+        )
+    return _render_complete_api_fallback(api_summary)
+
+
+def _render_price_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
+    if not _prediction_has_result(api_summary, ("predicted_highest_price_source", "predicted_highest_price_per_kwh", "forecast_by_source")):
+        return _insufficient_answer(
+            "Price prediction unavailable",
+            "Due to insufficient historical purchase records and pricing trends, I cannot predict which renewable source will have the highest price next month.",
+            api_summary,
+        )
+    return _render_complete_api_fallback(api_summary)
+
+
+def _render_ratio_html(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    ratios = analytics.get("demand_supply_ratio_by_source", {}) or {}
+    supply = analytics.get("listed_supply_kwh_by_source", {}) or {}
+    demand = analytics.get("completed_demand_kwh_by_source", {}) or {}
+    ordered = sorted(
+        settings.SUPPORTED_ENERGY_SOURCES,
+        key=lambda source: _number_or_none(ratios.get(source)) or -1.0,
+        reverse=True,
+    )
+    leader = next((source for source in ordered if _number_or_none(ratios.get(source)) is not None), None)
+    finding = (
+        f"{leader.title()} has the highest demand-to-supply ratio at "
+        f"{_display_value((_number_or_none(ratios.get(leader)) or 0.0) * 100, '%')}."
+        if leader else "The available data is insufficient to calculate demand-to-supply ratios."
+    )
+    rows = []
+    for source in ordered:
+        ratio = _number_or_none(ratios.get(source))
+        rows.append([
+            source.title(),
+            _display_value(demand.get(source), "kWh"),
+            _display_value(supply.get(source), "kWh"),
+            _display_value(ratio * 100, "%") if ratio is not None else "-",
+        ])
+    return _render_standard_answer(
+        "Demand-to-supply ratio by renewable source",
+        finding,
+        _responsive_table(["Source", "Completed demand", "Listed supply", "Demand-to-supply ratio"], rows),
+        api_summary,
+    )
+
+
+def _render_buyer_recommendation_or_insufficient(api_summary: QueryApiSummary) -> str:
+    recommendation = api_summary.recommendation_result
+    listing = recommendation.get("recommended_listing") if isinstance(recommendation, Mapping) else None
+    if not listing:
+        return _insufficient_answer(
+            "Recommendation unavailable",
+            "Due to insufficient price, availability, and demand data, I cannot reliably recommend the best renewable credit.",
+            api_summary,
+        )
+    return _render_complete_api_fallback(api_summary)
+
+
+def _render_price_guidance_or_insufficient(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    average = analytics.get("average_selling_price", {}) if isinstance(analytics, Mapping) else {}
+    prices = average.get("weighted_average_selling_price_by_source", {}) if isinstance(average, Mapping) else {}
+    available = [(source, _number_or_none(value)) for source, value in prices.items() if _number_or_none(value) is not None]
+    if not available or str(api_summary.confidence) == "insufficient_data":
+        return _insufficient_answer(
+            "Pricing guidance unavailable",
+            "Due to insufficient completed sales and comparable pricing history, I cannot recommend a reliable price for your credit.",
+            api_summary,
+        )
+    rows = [[source.title(), _display_value(value, "per kWh")] for source, value in available]
+    return _render_standard_answer(
+        "Recent realized prices",
+        "Use recent realized prices only as a reference; the available data does not guarantee a sale at any specific price.",
+        _responsive_table(["Source", "Realized price"], rows),
+        api_summary,
+    )
+
+
+def _render_historical_shortage_or_insufficient(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    source = (_filter_argument(api_summary, "energy_source") or "SOLAR").upper()
+    location = _filter_argument(api_summary, "location") or "the requested location"
+    total_supply = analytics.get("total_supply_kwh_by_source", {}) or {}
+    demand = analytics.get("realized_demand_kwh_by_source", {}) or {}
+    supply_value = _number_or_none(total_supply.get(source))
+    demand_value = _number_or_none(demand.get(source))
+    period = _period_caption_fixed(api_summary)
+    if supply_value is None or demand_value is None:
+        return _insufficient_answer(
+            "Historical shortage analysis unavailable",
+            f"Due to insufficient data regarding {period} total completed demand and available supply for {source.title()} credits in {location}, I cannot determine if there was a shortage.",
+            api_summary,
+        )
+    shortage = demand_value > supply_value
+    finding = (
+        f"Yes, there was a shortage of {source.title()} credits in {location} during {period}. "
+        f"Demand of {_display_value(demand_value, 'kWh')} exceeded supply of {_display_value(supply_value, 'kWh')}."
+        if shortage else
+        f"No shortage was identified for {source.title()} credits in {location} during {period}. "
+        f"Supply was {_display_value(supply_value, 'kWh')} and demand was {_display_value(demand_value, 'kWh')}."
+    )
+    return _render_standard_answer("Historical shortage analysis", finding, "", api_summary, period)
+
+
+def _render_recent_listings_html(api_summary: QueryApiSummary) -> str:
+    records: List[Mapping[str, Any]] = []
+    for result in list(api_summary.tool_results or []):
+        if getattr(result, "tool", "") != "get_all_listings":
+            continue
+        data = getattr(result, "data", None)
+        sample = getattr(data, "sample_records", None) if data is not None else None
+        if isinstance(sample, list):
+            records.extend(item for item in sample if isinstance(item, Mapping))
+    if not records:
+        analytics = dict(api_summary.analytics_result or {})
+        total = _display_value(analytics.get("total_listed_supply_kwh"), "kWh")
+        leader = analytics.get("highest_listed_supply_source")
+        return _insufficient_answer(
+            "Recent listings unavailable",
+            f"Due to insufficient data on individual listing events, I cannot show the specific credits that were recently listed. Aggregate listed supply is {total}"
+            + (f", led by {str(leader).title()}." if leader else "."),
+            api_summary,
+        )
+    rows = [[
+        str(item.get("id") or "-"),
+        str(item.get("energy_source") or "-").title(),
+        _display_value(item.get("energy_kwh"), "kWh"),
+        _display_value(item.get("price_per_kwh"), ""),
+        str(item.get("location") or "-"),
+        str(item.get("created_at") or "-")[:19],
+    ] for item in records]
+    return _render_standard_answer(
+        "Recently listed credits",
+        f"{len(rows)} recent listing events are available in the returned marketplace data.",
+        _responsive_table(["Listing", "Source", "Supply", "Price per kWh", "Location", "Listed at"], rows),
+        api_summary,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public orchestration entry point
 # ---------------------------------------------------------------------------
@@ -1303,7 +1487,14 @@ def answer_question(request: QueryRequest) -> QueryResponse:
     )
 
     intent = str(plan.get("intent", "none"))
-    if intent == "marketplace_summary" and api_summary is not None:
+    question_text = request.question.lower()
+    if api_summary is not None and "shortage" in question_text and ("last month" in question_text or "previous month" in question_text):
+        answer = _render_historical_shortage_or_insufficient(api_summary)
+    elif api_summary is not None and "recently listed" in question_text:
+        answer = _render_recent_listings_html(api_summary)
+    elif api_summary is not None and ("what price should i set" in question_text or "price should i set" in question_text):
+        answer = _render_price_guidance_or_insufficient(api_summary)
+    elif intent == "marketplace_summary" and api_summary is not None:
         answer = _render_marketplace_summary_html(api_summary)
     elif intent == "current_supply" and api_summary is not None:
         answer = _render_current_supply_html(api_summary)
@@ -1313,6 +1504,16 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         answer = _render_historical_demand_html(api_summary)
     elif intent == "supply_mix" and api_summary is not None:
         answer = _render_supply_mix_html(api_summary)
+    elif intent == "demand_prediction" and api_summary is not None:
+        answer = _render_demand_prediction_or_insufficient(api_summary)
+    elif intent == "shortage_prediction" and api_summary is not None:
+        answer = _render_shortage_prediction_or_insufficient(api_summary)
+    elif intent == "price_prediction" and api_summary is not None:
+        answer = _render_price_prediction_or_insufficient(api_summary)
+    elif intent == "demand_supply_ratio" and api_summary is not None:
+        answer = _render_ratio_html(api_summary)
+    elif intent == "buyer_recommendation" and api_summary is not None:
+        answer = _render_buyer_recommendation_or_insufficient(api_summary)
     elif intent == "seller_recommendation" and api_summary is not None:
         answer = _render_seller_recommendation_html(api_summary)
     else:

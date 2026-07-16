@@ -858,6 +858,9 @@ def _enforce_question_period(
     if "last week" in normalized or "last weak" in normalized:
         period_from = dates["last_week_start"]
         period_to = dates["last_week_end"]
+    elif "last month" in normalized or "previous month" in normalized:
+        period_from = dates["last_month_start"]
+        period_to = dates["last_month_end"]
     elif "yesterday" in normalized:
         period_from = dates["yesterday"]
         period_to = dates["yesterday"]
@@ -939,6 +942,27 @@ def _enforce_question_semantics(
         location = "Noida"
     elif "ghaziabad" in normalized:
         location = "Ghaziabad"
+
+    # Deterministic intent repair for prediction, recommendation, pricing,
+    # ratio, historical-shortage, and recent-listing questions.
+    if "demand to supply ratio" in normalized or "demand supply ratio" in normalized:
+        enforced["intent"] = "demand_supply_ratio"
+    elif "highest price" in normalized and "next month" in normalized:
+        enforced["intent"] = "price_prediction"
+    elif "shortage" in normalized and "next month" in normalized:
+        enforced["intent"] = "shortage_prediction"
+    elif "predict" in normalized and "demand" in normalized:
+        enforced["intent"] = "demand_prediction"
+    elif "highest demand" in normalized and "next month" in normalized:
+        enforced["intent"] = "demand_prediction"
+    elif "recommend" in normalized and "best" in normalized and "credit" in normalized:
+        enforced["intent"] = "buyer_recommendation"
+    elif "what price should i set" in normalized or "price should i set" in normalized:
+        enforced["intent"] = "seller_recommendation"
+    elif "recently listed" in normalized:
+        enforced["intent"] = "historical_supply"
+    elif "shortage" in normalized and ("last month" in normalized or "previous month" in normalized):
+        enforced["intent"] = "demand_and_supply"
 
     intent = str(enforced.get("intent", "none"))
     if "demand and supply" in normalized or "supply and demand" in normalized:
