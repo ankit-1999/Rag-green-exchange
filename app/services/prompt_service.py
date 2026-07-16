@@ -495,22 +495,26 @@ show a value from another source. Do not copy these instructions into the answer
         return """
 Create one ai-response section containing:
 1. An ai-hero ai-info block titled &#128200; Marketplace summary with a concise
-   statement of current active supply, active listing count, today's completed
-   demand, and the leading source.
-2. An ai-grid with cards for Active supply, Active listings, New supply today,
-   and Completed demand today.
+    statement of current remaining availability from period, currently active
+    listings from period, completed demand in period, and the leading source.
+2. An ai-grid with cards for Currently available from period, Active listings
+    from period, Listed supply in period, and Completed demand in period.
 3. An ai-section titled Supply by renewable source containing one proper
-   ai-table with exactly these columns: Source, Active listings, Available
-   supply, Market share, Average asking price, New supply today, Completed
-   demand today, and Average realized price. Include all supported sources.
-4. An ai-section titled Today's activity containing a proper ai-table for new
-   listings, newly listed kWh, completed purchases, completed demand kWh, and
-   realized price information supplied in API_CONTEXT.
+    ai-table with exactly these columns: Source, Currently available from period,
+    Listed supply in period, Completed demand in period, Market balance in
+    period, Average current asking price, and Average realized price. Include
+    all supported sources.
+4. An ai-section titled Period activity containing a proper ai-table for new
+    listings in period, newly listed kWh in period, completed purchases in
+    period, completed demand kWh in period, and realized price information
+    supplied in API_CONTEXT.
 5. An ai-section titled Location highlights containing only supplied top-supply
-   and top-demand locations.
+    and top-demand locations. Clearly label that top-supply location reflects
+    currently active listings created in the requested period.
 6. An ai-note ai-neutral block with the supplied data date or as-of timestamp.
-Do not create a per-source table where Total Active Supply and Highest Supply
-are repeated in every row. Do not copy these instructions into the response.
+Do not present historical period-end inventory. "Currently available from
+period" means active listings created in the requested period that remain
+available now. Do not copy these instructions into the response.
 """.strip()
 
     if intent in ANALYTICS_INTENTS:

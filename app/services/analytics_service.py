@@ -95,9 +95,9 @@ def analyze_plan(
             confidence = _descriptive_confidence(datasets["active_listings"], limitations, aggregates["active_listings"])
 
         elif intent == "marketplace_summary":
-            analytics_result = _marketplace_summary(datasets=datasets, aggregates=aggregates)
+            analytics_result = _marketplace_summary(plan=plan, datasets=datasets, aggregates=aggregates)
             calculation_method = (
-                "current active inventory plus same-day listing and completed-purchase "
+                "current unsold inventory from requested period plus period listing and completed-purchase "
                 "activity, grouped by source and location"
             )
             confidence = _combined_descriptive_confidence(datasets, limitations, aggregates)
@@ -318,10 +318,11 @@ def _clean_purchases(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any
 
 
 def _marketplace_summary(
+    plan: Mapping[str, Any],
     datasets: Mapping[str, Sequence[Mapping[str, Any]]],
     aggregates: Mapping[str, Mapping[str, Any]],
 ) -> Dict[str, Any]:
-    """Build current inventory plus today's listing and completed-demand summary."""
+    """Build period summary plus currently active inventory originating in that period."""
     active_records = datasets.get("active_listings", [])
     listing_records = datasets.get("all_listings", [])
     purchase_records = datasets.get("purchases", [])
@@ -329,26 +330,40 @@ def _marketplace_summary(
     listing_aggregates = aggregates.get("all_listings", {})
     purchase_aggregates = aggregates.get("purchases", {})
 
-    current_supply = _current_supply(active_records, active_aggregates)
-    supply_mix = _supply_mix(active_records, active_aggregates)
+    period = plan.get("historical_period", {})
+    period_from = period.get("from") if isinstance(period, Mapping) else None
+    period_to = period.get("to") if isinstance(period, Mapping) else None
+    period_active_records = _filter_records_by_created_period(
+        active_records,
+        period_from,
+        period_to,
+    )
+
+    # Active endpoint aggregates represent all currently active inventory.
+    # For period summaries, use filtered records only.
+    current_supply = _current_supply(period_active_records, {})
+    supply_mix = _supply_mix(period_active_records, {})
     new_supply = _historical_supply(listing_records, listing_aggregates)
     completed_demand = _historical_demand(purchase_records, purchase_aggregates)
     realized_prices = _average_selling_price(purchase_records, purchase_aggregates)
     balance = _market_balance(listing_records, purchase_records, listing_aggregates, purchase_aggregates)
 
-    active_breakdown = active_aggregates.get("source_breakdown", {})
     source_statistics: Dict[str, Dict[str, Any]] = {}
     for source in SUPPORTED_SOURCES:
-        stats = active_breakdown.get(source, {}) if isinstance(active_breakdown, Mapping) else {}
+        source_active = [
+            record
+            for record in period_active_records
+            if record.get("energy_source") == source
+        ]
         source_statistics[source] = {
-            "active_listings": int(_number(stats.get("active_listings")) or 0) if isinstance(stats, Mapping) else 0,
-            "available_supply_kwh": current_supply["supply_by_source_kwh"].get(source, 0.0),
-            "market_share_pct": supply_mix["supply_mix_percentage"].get(source, 0.0),
-            "average_asking_price_per_kwh": _round(_number(stats.get("avg_price_per_kwh")), 8) if isinstance(stats, Mapping) else None,
-            "newly_listed_kwh_today": new_supply["listed_supply_kwh_by_source"].get(source, 0.0),
-            "completed_demand_kwh_today": completed_demand["demand_kwh_by_source"].get(source, 0.0),
-            "average_realized_price_per_kwh_today": realized_prices["weighted_average_selling_price_by_source"].get(source),
-            "market_balance_kwh_today": balance["market_balance_kwh_by_source"].get(source, 0.0),
+            "currently_active_listings_from_period": len(source_active),
+            "currently_available_supply_kwh_from_period": current_supply["supply_by_source_kwh"].get(source, 0.0),
+            "current_share_of_period_origin_inventory_pct": supply_mix["supply_mix_percentage"].get(source, 0.0),
+            "average_current_asking_price_per_kwh": _round(_weighted_average_price(source_active), 8),
+            "listed_supply_kwh_in_period": new_supply["listed_supply_kwh_by_source"].get(source, 0.0),
+            "completed_demand_kwh_in_period": completed_demand["demand_kwh_by_source"].get(source, 0.0),
+            "average_realized_price_per_kwh_in_period": realized_prices["weighted_average_selling_price_by_source"].get(source),
+            "market_balance_kwh_in_period": balance["market_balance_kwh_by_source"].get(source, 0.0),
         }
 
     location_supply = _location_totals_from_aggregate(active_aggregates.get("location_breakdown", {}), "total_kwh")
@@ -357,28 +372,70 @@ def _marketplace_summary(
     top_demand_location, top_demand_value = _positive_max_item(location_demand)
 
     return {
-        "current_inventory": current_supply,
-        "supply_mix": supply_mix,
-        "today_listing_activity": {
-            "new_listing_count": len(listing_records),
-            "newly_listed_supply_kwh": new_supply["total_listed_supply_kwh"],
-            "newly_listed_supply_by_source_kwh": new_supply["listed_supply_kwh_by_source"],
+        "current_unsold_inventory_from_period": current_supply,
+        "current_unsold_supply_mix_from_period": supply_mix,
+        "period_listing_activity": {
+            "new_listing_count_in_period": len(listing_records),
+            "newly_listed_supply_kwh_in_period": new_supply["total_listed_supply_kwh"],
+            "newly_listed_supply_by_source_kwh_in_period": new_supply["listed_supply_kwh_by_source"],
         },
-        "today_purchase_activity": {
-            "completed_purchase_count": len(purchase_records),
-            "completed_demand_kwh": completed_demand["total_completed_demand_kwh"],
-            "completed_demand_by_source_kwh": completed_demand["demand_kwh_by_source"],
-            "weighted_average_realized_price_by_source": realized_prices["weighted_average_selling_price_by_source"],
+        "period_purchase_activity": {
+            "completed_purchase_count_in_period": len(purchase_records),
+            "completed_demand_kwh_in_period": completed_demand["total_completed_demand_kwh"],
+            "completed_demand_by_source_kwh_in_period": completed_demand["demand_kwh_by_source"],
+            "weighted_average_realized_price_by_source_in_period": realized_prices["weighted_average_selling_price_by_source"],
         },
         "source_statistics": source_statistics,
-        "today_market_balance": balance,
+        "period_market_balance": balance,
         "location_highlights": {
-            "highest_active_supply_location": top_supply_location,
-            "highest_active_supply_kwh": _round(top_supply_value),
+            "highest_currently_available_location_from_period": _highest_location_from_records(period_active_records),
+            "highest_currently_available_kwh_from_period": _highest_location_value_from_records(period_active_records),
             "highest_completed_demand_location": top_demand_location,
             "highest_completed_demand_kwh": _round(top_demand_value),
         },
     }
+
+
+def _filter_records_by_created_period(
+    records: Sequence[Mapping[str, Any]],
+    period_from: Any,
+    period_to: Any,
+) -> List[Mapping[str, Any]]:
+    """Keep currently active listings that were created in the requested period."""
+    if not period_from or not period_to:
+        return list(records)
+    try:
+        start = date.fromisoformat(str(period_from)[:10])
+        end = date.fromisoformat(str(period_to)[:10])
+    except ValueError:
+        return list(records)
+
+    output: List[Mapping[str, Any]] = []
+    for record in records:
+        created_at = record.get("created_at")
+        if isinstance(created_at, datetime) and start <= created_at.date() <= end:
+            output.append(record)
+    return output
+
+
+def _active_location_totals(records: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+    totals: Dict[str, float] = defaultdict(float)
+    for record in records:
+        location = record.get("location")
+        energy = _number(record.get("energy_kwh"))
+        if location and energy is not None:
+            totals[str(location)] += energy
+    return dict(totals)
+
+
+def _highest_location_from_records(records: Sequence[Mapping[str, Any]]) -> Optional[str]:
+    location, _ = _positive_max_item(_active_location_totals(records))
+    return location
+
+
+def _highest_location_value_from_records(records: Sequence[Mapping[str, Any]]) -> Optional[float]:
+    _, value = _positive_max_item(_active_location_totals(records))
+    return _round(value)
 
 
 def _location_totals_from_aggregate(value: Any, metric: str) -> Dict[str, float]:

@@ -526,12 +526,14 @@ supply_by_location:
 
 marketplace_summary:
 - Use for: Summarize today's marketplace, Summarize marketplace activity, and Show platform statistics.
-- Must use get_active_listings for current inventory and source/location breakdowns.
-- Must use get_all_listings with today's created_from and created_to for today's new supply.
-- Must use get_all_purchases with status=COMPLETED and today's completed_from and completed_to for today's realized demand.
+- Must use get_active_listings, including for yesterday and last-week summaries.
+- get_active_listings represents credits still available for sale now.
+- For historical periods, analytics must retain only active listings whose created_at falls inside the requested period to measure remaining availability from that period.
+- Must use get_all_listings with requested created_from and created_to for period listing supply.
+- Must use get_all_purchases with status=COMPLETED and requested completed_from and completed_to for period realized demand.
 - Do not apply an energy_source filter; summarize all supported sources.
 - Group by energy_source and location.
-- Include active supply, active listing count, today's new listings and kWh, completed purchases and kWh, realized price, market balance, and location highlights.
+- Include current unsold inventory from period, period listing supply, period completed demand, realized prices, market balance, and location highlights.
 
 demand_supply_ratio:
 - Must use get_all_listings and get_all_purchases.
@@ -613,13 +615,13 @@ FILTER RULES:
 ROUTING EXAMPLES:
 
 Question: Summarize today's marketplace.
-Result: marketplace_summary, get_active_listings plus today-filtered all listings and completed purchases, no source filter, group by source and location.
+Result: marketplace_summary, get_active_listings plus period-filtered all listings and completed purchases, no source filter, group by source and location. Analytics filters active listings by created_at to report credits from the requested period that remain available now.
 
 Question: Summarize marketplace activity.
-Result: marketplace_summary with current inventory and today's listing and purchase activity.
+Result: marketplace_summary with current unsold inventory from period and period listing and purchase activity.
 
 Question: Show platform statistics.
-Result: marketplace_summary with active supply, listing activity, completed demand, prices, and location highlights.
+Result: marketplace_summary with current unsold inventory from period, listing activity in period, completed demand in period, prices, and location highlights.
 
 Question: Which renewable source currently has the highest available supply?
 Result: current_supply, get_active_listings, group_by energy_source, no source filter.
@@ -996,21 +998,13 @@ def _enforce_required_plan_components(
             args.setdefault("location", location)
 
         if tool == "get_all_listings":
-            args["created_from"] = (
-                dates["today"] if intent == "marketplace_summary" else history_from
-            )
-            args["created_to"] = (
-                dates["today"] if intent == "marketplace_summary" else history_to
-            )
+            args["created_from"] = history_from
+            args["created_to"] = history_to
 
         elif tool == "get_all_purchases":
             args["status"] = "COMPLETED"
-            args["completed_from"] = (
-                dates["today"] if intent == "marketplace_summary" else history_from
-            )
-            args["completed_to"] = (
-                dates["today"] if intent == "marketplace_summary" else history_to
-            )
+            args["completed_from"] = history_from
+            args["completed_to"] = history_to
             args["group_by_month"] = (
                 intent == "price_prediction"
             )
