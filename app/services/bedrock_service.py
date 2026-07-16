@@ -369,6 +369,7 @@ def _date_context(
 
     return {
         "today": current.isoformat(),
+        "yesterday": (current - timedelta(days=1)).isoformat(),
         "this_week_start": week_start.isoformat(),
         "this_week_end": (
             week_start + timedelta(days=6)
@@ -400,6 +401,14 @@ def _date_context(
             )
         ).isoformat(),
     }
+
+
+def _start_of_day(value: str) -> str:
+    return f"{value[:10]}T00:00:00Z"
+
+
+def _end_of_day(value: str) -> str:
+    return f"{value[:10]}T23:59:59Z"
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +812,11 @@ def plan_api_calls(question: str) -> Dict[str, Any]:
             value,
             dates,
         )
+        plan = _enforce_question_semantics(
+            plan,
+            value,
+            dates,
+        )
 
         logger.info(
             "API plan intent=%s calls=%s",
@@ -878,6 +892,101 @@ def _enforce_question_period(
         updated_calls.append(call)
 
     enforced["tool_calls"] = updated_calls
+    return enforced
+
+
+def _enforce_question_semantics(
+    plan: Mapping[str, Any],
+    question: str,
+    dates: Mapping[str, str],
+) -> Dict[str, Any]:
+    """Repair high-value marketplace semantics directly from user wording."""
+    enforced = dict(plan)
+    normalized = " ".join(str(question or "").lower().replace("-", " ").split())
+
+    summary_phrases = (
+        "summarize today",
+        "summarize today's",
+        "summarize yesterday",
+        "summarize last week",
+        "summarize last weak",
+        "summarize marketplace activity",
+        "show platform statistics",
+    )
+    if any(phrase in normalized for phrase in summary_phrases):
+        enforced["intent"] = "marketplace_summary"
+        enforced["requires_live_data"] = True
+        enforced["requires_api_data"] = True
+
+    sources: List[str] = []
+    source_terms = {
+        "solar": "SOLAR",
+        "wind": "WIND",
+        "small hydro": "HYDRO",
+        "small_hydro": "HYDRO",
+        "hydro": "HYDRO",
+        "biomass": "BIOMASS",
+        "geothermal": "GEOTHERMAL",
+        "tidal": "TIDAL",
+        "other": "OTHER",
+    }
+    for term, source in source_terms.items():
+        if term in normalized and source not in sources:
+            sources.append(source)
+
+    location: Optional[str] = None
+    if "noida" in normalized:
+        location = "Noida"
+    elif "ghaziabad" in normalized:
+        location = "Ghaziabad"
+
+    intent = str(enforced.get("intent", "none"))
+    if "demand and supply" in normalized or "supply and demand" in normalized:
+        enforced["intent"] = "demand_and_supply"
+        intent = "demand_and_supply"
+    elif "compare" in normalized and "demand" in normalized:
+        enforced["intent"] = "historical_demand"
+        intent = "historical_demand"
+    elif "percentage" in normalized and "active" in normalized and "supply" in normalized:
+        enforced["intent"] = "supply_mix"
+        intent = "supply_mix"
+    elif "available" in normalized and (sources or location):
+        enforced["intent"] = "current_supply"
+        intent = "current_supply"
+
+    required = REQUIRED_TOOLS_BY_INTENT.get(intent, ())
+    existing = {
+        str(call.get("tool")): dict(call.get("arguments", {}) or {})
+        for call in enforced.get("tool_calls", [])
+        if isinstance(call, Mapping)
+    }
+    period = enforced.get("historical_period", {})
+    period_from = period.get("from") if isinstance(period, Mapping) else None
+    period_to = period.get("to") if isinstance(period, Mapping) else None
+
+    calls: List[Dict[str, Any]] = []
+    for tool in required:
+        arguments = existing.get(tool, {})
+        if len(sources) == 1:
+            arguments["energy_source"] = sources[0]
+        else:
+            arguments.pop("energy_source", None)
+        if location:
+            arguments["location"] = location
+        if tool == "get_all_listings" and period_from and period_to:
+            arguments["created_from"] = _start_of_day(str(period_from))
+            arguments["created_to"] = _end_of_day(str(period_to))
+        elif tool == "get_all_purchases":
+            arguments["status"] = "COMPLETED"
+            if period_from and period_to:
+                arguments["completed_from"] = _start_of_day(str(period_from))
+                arguments["completed_to"] = _end_of_day(str(period_to))
+        calls.append({"tool": tool, "arguments": _normalize_args(tool, arguments)})
+
+    if calls:
+        enforced["tool_calls"] = calls
+    enforced["group_by"] = ["energy_source", "location"] if intent == "marketplace_summary" else ["energy_source"]
+    enforced["requested_energy_sources"] = sources
     return enforced
 
 

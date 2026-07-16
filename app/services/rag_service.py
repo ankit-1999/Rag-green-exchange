@@ -455,6 +455,51 @@ def _answer_mode(
     return "insufficient_data"
 
 
+def _effective_period(api_summary: QueryApiSummary) -> Tuple[Optional[str], Optional[str]]:
+    """Use model period first, then derive dates from executed tool filters."""
+    period = api_summary.historical_period
+    start = str(getattr(period, "from_date", "") or "") if period else ""
+    end = str(getattr(period, "to_date", "") or "") if period else ""
+    if start and end:
+        return start[:10], end[:10]
+    for item in list(api_summary.filters_used or []):
+        if not isinstance(item, Mapping):
+            continue
+        arguments = item.get("arguments", {})
+        if not isinstance(arguments, Mapping):
+            continue
+        candidate_start = arguments.get("created_from") or arguments.get("completed_from")
+        candidate_end = arguments.get("created_to") or arguments.get("completed_to")
+        if candidate_start and candidate_end:
+            return str(candidate_start)[:10], str(candidate_end)[:10]
+    return None, None
+
+
+def _period_caption_fixed(api_summary: QueryApiSummary) -> str:
+    start, end = _effective_period(api_summary)
+    if not start or not end:
+        return "the requested period"
+    today = datetime.now(timezone.utc).date().isoformat()
+    if start == end == today:
+        return f"today ({today})"
+    if start == end:
+        return start
+    return f"{start} to {end}"
+
+
+def _requested_sources(api_summary: QueryApiSummary) -> List[str]:
+    result: List[str] = []
+    for item in list(api_summary.filters_used or []):
+        if not isinstance(item, Mapping):
+            continue
+        arguments = item.get("arguments", {})
+        if isinstance(arguments, Mapping):
+            value = arguments.get("energy_source")
+            if value and str(value) not in result:
+                result.append(str(value))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Public orchestration entry point
 # ---------------------------------------------------------------------------
@@ -478,7 +523,7 @@ def _render_marketplace_summary_html(
 
     period_label = _summary_period_label(period_from, period_to, is_today)
     if period_label in {"Current", "Marketplace"}:
-        period_label = _period_caption(api_summary)
+        period_label = _period_caption_fixed(api_summary)
     listed_total = _number_or_none(
         listing_activity.get("newly_listed_supply_kwh_in_period")
         or listing_activity.get("listed_supply_kwh")
@@ -928,6 +973,20 @@ def _render_current_supply_html(api_summary: QueryApiSummary) -> str:
     requested_source = _filter_argument(api_summary, "energy_source")
     requested_location = _filter_argument(api_summary, "location")
     matching = analytics.get("matching_listings", []) or []
+    if requested_source:
+        matching = [
+            item
+            for item in matching
+            if isinstance(item, Mapping)
+            and str(item.get("energy_source", "")).upper() == requested_source.upper()
+        ]
+    if requested_location:
+        matching = [
+            item
+            for item in matching
+            if isinstance(item, Mapping)
+            and requested_location.lower() in str(item.get("location", "")).lower()
+        ]
 
     if requested_source or requested_location:
         source_label = requested_source.title() if requested_source else "Renewable"
@@ -991,7 +1050,7 @@ def _render_current_supply_html(api_summary: QueryApiSummary) -> str:
 def _render_demand_and_supply_html(api_summary: QueryApiSummary) -> str:
     analytics = dict(api_summary.analytics_result or {})
     requested_source = _filter_argument(api_summary, "energy_source")
-    period = _period_caption(api_summary)
+    period = _period_caption_fixed(api_summary)
 
     remaining = analytics.get("remaining_supply_kwh_by_source", {}) or {}
     sold = analytics.get("sold_supply_kwh_by_source", {}) or {}
@@ -1030,6 +1089,57 @@ def _render_demand_and_supply_html(api_summary: QueryApiSummary) -> str:
         rows,
     )
     return _render_standard_answer("Demand and supply", finding, table, api_summary, period)
+
+
+def _render_historical_demand_html(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    demand = analytics.get("demand_kwh_by_source", {}) or {}
+    shares = analytics.get("demand_share_percentage", {}) or {}
+    ranking = list(analytics.get("demand_ranking_desc", []) or [])
+    requested = _requested_sources(api_summary)
+    ordered = [source for source in ranking if not requested or source in requested]
+    if not ordered:
+        ordered = requested or list(settings.SUPPORTED_ENERGY_SOURCES)
+    leader = ordered[0] if ordered else None
+    period = _period_caption_fixed(api_summary)
+    finding = (
+        f"{str(leader).title()} had the most completed demand during {period}, at "
+        f"{_display_value(demand.get(leader), 'kWh')}."
+        if leader else f"No completed demand was recorded during {period}."
+    )
+    rows = [
+        [str(source).title(), _display_value(demand.get(source), "kWh"), _display_value(shares.get(source), "%")]
+        for source in ordered
+    ]
+    table = _responsive_table(["Source", "Completed demand", "Demand share"], rows)
+    return _render_standard_answer("Demand comparison", finding, table, api_summary, period)
+
+
+def _render_supply_mix_html(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    supply = analytics.get("active_supply_kwh_by_source", {}) or {}
+    shares = analytics.get("supply_mix_percentage", {}) or {}
+    ordered = sorted(
+        settings.SUPPORTED_ENERGY_SOURCES,
+        key=lambda source: _number_or_none(shares.get(source)) or 0.0,
+        reverse=True,
+    )
+    leader = ordered[0] if ordered else None
+    finding = (
+        f"{str(leader).title()} has the largest share of active marketplace supply at "
+        f"{_display_value(shares.get(leader), '%')}."
+        if leader else "No active marketplace supply is available."
+    )
+    rows = [
+        [source.title(), _display_value(supply.get(source), "kWh"), _display_value(shares.get(source), "%")]
+        for source in ordered
+    ]
+    return _render_standard_answer(
+        "Active marketplace supply mix",
+        finding,
+        _responsive_table(["Source", "Active supply", "Market share"], rows),
+        api_summary,
+    )
 
 
 def _render_standard_answer(
@@ -1195,6 +1305,10 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         answer = _render_current_supply_html(api_summary)
     elif intent == "demand_and_supply" and api_summary is not None:
         answer = _render_demand_and_supply_html(api_summary)
+    elif intent == "historical_demand" and api_summary is not None:
+        answer = _render_historical_demand_html(api_summary)
+    elif intent == "supply_mix" and api_summary is not None:
+        answer = _render_supply_mix_html(api_summary)
     elif intent == "seller_recommendation" and api_summary is not None:
         answer = _render_seller_recommendation_html(api_summary)
     else:
