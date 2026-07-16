@@ -592,21 +592,16 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         logger.warning("Final answer generation unavailable: %s", exc)
         answer = _build_fallback_answer(api_summary, hits, exc)
 
-    answer = _append_collapsible_sources(
-        answer,
-        sources,
-        api_summary,
-    )
-    embedded_source_count = len(sources)
-    api_summary = _clear_embedded_source_metadata(api_summary)
-
+    # Keep source metadata outside response.answer. The frontend may ignore or
+    # render QueryResponse.sources and api_summary.tool_results separately.
+    # The generated HTML answer must not contain a Sources Used section.
     mode = _answer_mode(bool(hits), api_summary, api_facts_used)
 
     logger.info(
         "answer_question: top_k=%d sources=%d mode=%s "
         "api_facts_used=%s intent=%s",
         top_k,
-        embedded_source_count,
+        len(sources),
         mode,
         api_facts_used,
         plan.get("intent", "none"),
@@ -614,8 +609,8 @@ def answer_question(request: QueryRequest) -> QueryResponse:
 
     return QueryResponse(
         answer=answer,
-        source_count=0,
-        sources=[],
+        source_count=len(sources),
+        sources=sources,
         answer_mode=mode,
         api_facts_used=api_facts_used,
         api_summary=api_summary,
