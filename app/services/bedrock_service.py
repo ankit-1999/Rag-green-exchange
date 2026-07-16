@@ -798,6 +798,11 @@ def plan_api_calls(question: str) -> Dict[str, Any]:
             plan,
             dates,
         )
+        plan = _enforce_question_period(
+            plan,
+            value,
+            dates,
+        )
 
         logger.info(
             "API plan intent=%s calls=%s",
@@ -825,6 +830,55 @@ def plan_api_calls(question: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Planner response parsing and normalization
 # ---------------------------------------------------------------------------
+
+
+def _enforce_question_period(
+    plan: Mapping[str, Any],
+    question: str,
+    dates: Mapping[str, str],
+) -> Dict[str, Any]:
+    """Resolve explicit relative periods directly from the user question."""
+    enforced = dict(plan)
+    normalized = " ".join(str(question or "").lower().replace("-", " ").split())
+
+    if "last week" in normalized or "last weak" in normalized:
+        period_from = dates["last_week_start"]
+        period_to = dates["last_week_end"]
+    elif "yesterday" in normalized:
+        period_from = dates["yesterday"]
+        period_to = dates["yesterday"]
+    elif "today" in normalized or "today's" in normalized or "todays" in normalized:
+        period_from = dates["today"]
+        period_to = dates["today"]
+    else:
+        return enforced
+
+    enforced["historical_period"] = {
+        "from": period_from,
+        "to": period_to,
+    }
+
+    updated_calls: List[Dict[str, Any]] = []
+    for raw_call in enforced.get("tool_calls", []):
+        if not isinstance(raw_call, Mapping):
+            continue
+        call = dict(raw_call)
+        tool = str(call.get("tool", ""))
+        arguments = dict(call.get("arguments", {}) or {})
+
+        if tool == "get_all_listings":
+            arguments["created_from"] = period_from
+            arguments["created_to"] = period_to
+        elif tool == "get_all_purchases":
+            arguments["status"] = "COMPLETED"
+            arguments["completed_from"] = period_from
+            arguments["completed_to"] = period_to
+
+        call["arguments"] = _normalize_args(tool, arguments)
+        updated_calls.append(call)
+
+    enforced["tool_calls"] = updated_calls
+    return enforced
 
 
 def _parse_json(text: str) -> Dict[str, Any]:

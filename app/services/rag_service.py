@@ -477,6 +477,8 @@ def _render_marketplace_summary_html(
     current_inventory = analytics.get("current_unsold_inventory_from_period", {}) or {}
 
     period_label = _summary_period_label(period_from, period_to, is_today)
+    if period_label in {"Current", "Marketplace"}:
+        period_label = _period_caption(api_summary)
     listed_total = _number_or_none(
         listing_activity.get("newly_listed_supply_kwh_in_period")
         or listing_activity.get("listed_supply_kwh")
@@ -511,10 +513,10 @@ def _render_marketplace_summary_html(
     )
 
     cards = [
-        ("Currently available from period", available_total, "kWh"),
-        ("Active listings from period", _int_or_zero(current_inventory.get("listing_count")), ""),
-        ("Listed supply in period", listed_total, "kWh"),
-        ("Completed demand in period", demand_total, "kWh"),
+        (f"Currently available now from {period_label}", available_total, "kWh"),
+        (f"Active listings now from {period_label}", _int_or_zero(current_inventory.get("listing_count")), ""),
+        (f"Listed supply during {period_label}", listed_total, "kWh"),
+        (f"Completed demand during {period_label}", demand_total, "kWh"),
     ]
     card_html = "".join(
         _metric_card(label, value, unit)
@@ -523,10 +525,10 @@ def _render_marketplace_summary_html(
     )
 
     candidates = [
-        ("Currently available from period", "available", "kWh"),
-        ("Listed supply in period", "listed", "kWh"),
-        ("Completed demand in period", "demand", "kWh"),
-        ("Market balance in period", "balance", "kWh"),
+        (f"Currently available now from {period_label}", "available", "kWh"),
+        (f"Listed supply during {period_label}", "listed", "kWh"),
+        (f"Completed demand during {period_label}", "demand", "kWh"),
+        (f"Market balance during {period_label}", "balance", "kWh"),
         ("Average current asking price", "asking", ""),
         ("Average realized price", "realized", ""),
     ]
@@ -560,8 +562,8 @@ def _render_marketplace_summary_html(
     activity_table = _responsive_table(
         headers=["Activity", "Count", "kWh"],
         rows=[
-            ["Listings in period", str(listing_count), _display_value(listed_total, "kWh")],
-            ["Completed purchases in period", str(purchase_count), _display_value(demand_total, "kWh")],
+            [f"Listings during {period_label}", str(listing_count), _display_value(listed_total, "kWh")],
+            [f"Completed purchases during {period_label}", str(purchase_count), _display_value(demand_total, "kWh")],
         ],
     )
 
@@ -897,6 +899,170 @@ def _render_complete_api_fallback(api_summary: QueryApiSummary) -> str:
     )
 
 
+def _period_caption(api_summary: QueryApiSummary) -> str:
+    period = api_summary.historical_period
+    start = str(getattr(period, "from_date", "") or "") if period else ""
+    end = str(getattr(period, "to_date", "") or "") if period else ""
+    if not start or not end:
+        return "the requested period"
+    today = datetime.now(timezone.utc).date().isoformat()
+    if start == end == today:
+        return f"today ({today})"
+    if start == end:
+        return start
+    return f"{start} to {end}"
+
+
+def _filter_argument(api_summary: QueryApiSummary, key: str) -> Optional[str]:
+    for item in list(api_summary.filters_used or []):
+        if not isinstance(item, Mapping):
+            continue
+        arguments = item.get("arguments", {})
+        if isinstance(arguments, Mapping) and arguments.get(key) not in (None, ""):
+            return str(arguments[key])
+    return None
+
+
+def _render_current_supply_html(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    requested_source = _filter_argument(api_summary, "energy_source")
+    requested_location = _filter_argument(api_summary, "location")
+    matching = analytics.get("matching_listings", []) or []
+
+    if requested_source or requested_location:
+        source_label = requested_source.title() if requested_source else "Renewable"
+        location_label = requested_location or "the requested location"
+        if matching:
+            total = sum(
+                _number_or_none(item.get("energy_kwh")) or 0.0
+                for item in matching
+                if isinstance(item, Mapping)
+            )
+            finding = (
+                f"{len(matching)} {source_label} listing{'s are' if len(matching) != 1 else ' is'} currently "
+                f"available in {location_label}, totaling {_display_value(total, 'kWh')}."
+            )
+        else:
+            finding = f"No currently available {source_label} listings matched {location_label}."
+
+        rows: List[List[str]] = []
+        for item in matching:
+            if not isinstance(item, Mapping):
+                continue
+            rows.append(
+                [
+                    str(item.get("credit_reference") or item.get("listing_id") or "-"),
+                    str(item.get("energy_source") or "-").title(),
+                    _display_value(item.get("energy_kwh"), "kWh"),
+                    _display_value(item.get("price_per_kwh"), ""),
+                    str(item.get("location") or "-"),
+                ]
+            )
+        table = _responsive_table(
+            ["Credit / Listing", "Source", "Available supply", "Price per kWh", "Location"],
+            rows,
+        ) if rows else ""
+        title = "Available marketplace credits"
+    else:
+        leader = analytics.get("highest_supply_source")
+        leader_value = analytics.get("highest_supply_kwh")
+        total = analytics.get("total_active_supply_kwh")
+        if leader:
+            finding = (
+                f"{str(leader).title()} is dominating current marketplace inventory with "
+                f"{_display_value(leader_value, 'kWh')} available, out of "
+                f"{_display_value(total, 'kWh')} total active supply."
+            )
+        else:
+            finding = "No active marketplace supply is currently available."
+
+        supply = analytics.get("supply_by_source_kwh", {}) or {}
+        rows = sorted(
+            [[str(source).title(), _display_value(value, "kWh")] for source, value in supply.items()],
+            key=lambda row: _number_or_none(row[1].split()[0]) or 0.0,
+            reverse=True,
+        )
+        table = _responsive_table(["Source", "Available supply"], rows)
+        title = "Current marketplace supply"
+
+    return _render_standard_answer(title, finding, table, api_summary)
+
+
+def _render_demand_and_supply_html(api_summary: QueryApiSummary) -> str:
+    analytics = dict(api_summary.analytics_result or {})
+    requested_source = _filter_argument(api_summary, "energy_source")
+    period = _period_caption(api_summary)
+
+    remaining = analytics.get("remaining_supply_kwh_by_source", {}) or {}
+    sold = analytics.get("sold_supply_kwh_by_source", {}) or {}
+    total = analytics.get("total_supply_kwh_by_source", {}) or {}
+    demand = analytics.get("realized_demand_kwh_by_source", {}) or {}
+
+    sources = [requested_source] if requested_source else list(settings.SUPPORTED_ENERGY_SOURCES)
+    rows: List[List[str]] = []
+    for source in sources:
+        if not source:
+            continue
+        rows.append(
+            [
+                str(source).title(),
+                _display_value(remaining.get(source), "kWh"),
+                _display_value(sold.get(source), "kWh"),
+                _display_value(total.get(source), "kWh"),
+                _display_value(demand.get(source), "kWh"),
+            ]
+        )
+
+    if requested_source:
+        source_label = requested_source.title()
+        finding = (
+            f"During {period}, {source_label} total supply was {_display_value(total.get(requested_source), 'kWh')}, "
+            f"comprising {_display_value(remaining.get(requested_source), 'kWh')} remaining and "
+            f"{_display_value(sold.get(requested_source), 'kWh')} sold. Realized demand was "
+            f"{_display_value(demand.get(requested_source), 'kWh')}."
+        )
+    else:
+        leader = analytics.get("highest_total_supply_source")
+        finding = f"During {period}, {str(leader).title() if leader else 'no source'} had the highest total supply."
+
+    table = _responsive_table(
+        ["Source", "Remaining supply", "Sold supply", "Total supply", "Realized demand"],
+        rows,
+    )
+    return _render_standard_answer("Demand and supply", finding, table, api_summary, period)
+
+
+def _render_standard_answer(
+    title: str,
+    finding: str,
+    table: str,
+    api_summary: QueryApiSummary,
+    period: Optional[str] = None,
+) -> str:
+    data_as_of = str(api_summary.data_as_of or "")[:10]
+    note_parts: List[str] = []
+    if period:
+        note_parts.append(f"Period: {period}")
+    if len(data_as_of) == 10:
+        note_parts.append(f"Data as of: {data_as_of}")
+    note = " | ".join(note_parts)
+
+    return (
+        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;flex-direction:column;gap:14px;'
+        'color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
+        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#eff6ff;border-left:4px solid #2563eb;">'
+        f'<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">{html.escape(title)}</h3>'
+        f'<p style="box-sizing:border-box;margin:0;">{html.escape(finding)}</p></div>'
+        + (f'<section style="box-sizing:border-box;width:100%;">{table}</section>' if table else "")
+        + (
+            f'<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;color:#475569;font-size:13px;">{html.escape(note)}</div>'
+            if note
+            else ""
+        )
+        + "</section>"
+    )
+
+
 def _append_collapsible_sources(
     answer: str,
     sources: Sequence[QuerySource],
@@ -1025,6 +1191,10 @@ def answer_question(request: QueryRequest) -> QueryResponse:
     intent = str(plan.get("intent", "none"))
     if intent == "marketplace_summary" and api_summary is not None:
         answer = _render_marketplace_summary_html(api_summary)
+    elif intent == "current_supply" and api_summary is not None:
+        answer = _render_current_supply_html(api_summary)
+    elif intent == "demand_and_supply" and api_summary is not None:
+        answer = _render_demand_and_supply_html(api_summary)
     elif intent == "seller_recommendation" and api_summary is not None:
         answer = _render_seller_recommendation_html(api_summary)
     else:

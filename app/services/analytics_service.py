@@ -482,7 +482,25 @@ def _demand_totals(records: Sequence[Mapping[str, Any]], aggregates: Mapping[str
 def _current_supply(records: Sequence[Mapping[str, Any]], aggregates: Mapping[str, Any]) -> Dict[str, Any]:
     totals = _active_totals(records, aggregates)
     winner, value = _positive_max_item(totals)
-    return {"supply_by_source_kwh": totals, "total_active_supply_kwh": _round(sum(totals.values())), "highest_supply_source": winner, "highest_supply_kwh": _round(value), "listing_count": len(records)}
+    return {
+        "supply_by_source_kwh": totals,
+        "total_active_supply_kwh": _round(sum(totals.values())),
+        "highest_supply_source": winner,
+        "highest_supply_kwh": _round(value),
+        "listing_count": len(records),
+        "matching_listings": [
+            {
+                "listing_id": record.get("id"),
+                "credit_reference": record.get("credit_reference"),
+                "energy_source": record.get("energy_source"),
+                "energy_kwh": _round(_number(record.get("energy_kwh"))),
+                "price_per_kwh": _round(_number(record.get("price_per_kwh")), 8),
+                "location": record.get("location"),
+                "expires_at": record.get("expires_at"),
+            }
+            for record in records
+        ],
+    }
 
 
 def _supply_mix(records: Sequence[Mapping[str, Any]], aggregates: Mapping[str, Any]) -> Dict[str, Any]:
