@@ -194,7 +194,7 @@ def _resolve_api_summary(
         limitations=list(analysis.get("limitations", []) or []),  # type: ignore
         missing_parameters=list(plan.get("missing_parameters", []) or []),  # type: ignore
         calculation_method=analysis.get("calculation_method"),  # type: ignore
-        data_as_of=datetime.now(timezone.utc).isoformat(),  # type: ignore
+        data_as_of=datetime.now(timezone.utc).date().isoformat(),  # type: ignore
         tool_results=compact_tool_results,  # type: ignore
     )
 

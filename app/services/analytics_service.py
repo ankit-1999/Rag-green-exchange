@@ -546,7 +546,20 @@ def _historical_demand(records: Sequence[Mapping[str, Any]], aggregates: Mapping
         backend_share = _number(stats.get("demand_share_pct")) if isinstance(stats, Mapping) else None
         percentages[source] = _round(backend_share if backend_share is not None else ((totals[source] / grand_total) * 100 if grand_total else 0.0), 2)
     winner, value = _positive_max_item(totals)
-    return {"demand_kwh_by_source": totals, "demand_share_percentage": percentages, "purchase_count_by_source": counts, "total_completed_demand_kwh": _round(grand_total), "highest_demand_source": winner, "highest_demand_kwh": _round(value)}
+    ranking = sorted(
+        SUPPORTED_SOURCES,
+        key=lambda source: totals[source],
+        reverse=True,
+    )
+    return {
+        "demand_kwh_by_source": totals,
+        "demand_share_percentage": percentages,
+        "purchase_count_by_source": counts,
+        "demand_ranking_desc": ranking,
+        "total_completed_demand_kwh": _round(grand_total),
+        "highest_demand_source": winner,
+        "highest_demand_kwh": _round(value),
+    }
 
 
 def _average_selling_price(records: Sequence[Mapping[str, Any]], aggregates: Mapping[str, Any]) -> Dict[str, Any]:

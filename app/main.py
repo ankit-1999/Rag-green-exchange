@@ -13,7 +13,7 @@ Includes:
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -65,6 +65,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Attach security headers that the browser should enforce."""
+    response = await call_next(request)
+    response.headers["Referrer-Policy"] = settings.REFERRER_POLICY
+    return response
 
 # ---------------------------------------------------------------------------
 # Routers

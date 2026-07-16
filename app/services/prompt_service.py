@@ -137,6 +137,7 @@ ALLOWED_HTML_CLASSES = (
     "ai-badge-low",
     "ai-badge-insufficient",
     "ai-table",
+    "ai-table-wrap",
     "ai-note",
     "ai-muted",
     "ai-source-solar",
@@ -361,12 +362,17 @@ Allowed class names:
 Source-specific class names:
 {_source_class_lines()}
 
-Never use style attributes. Never invent class names outside this list.
+Every element may use class and style attributes only. Inline styles are
+required because the frontend will render response.answer directly with
+innerHTML and will not provide chatbot CSS.
+Never invent class names outside the allowed list.
 Never use scripts, links, images, forms, inputs, buttons, iframes, SVG, canvas,
 video, audio, object, embed, meta, base, or event-handler attributes.
 Never include id, href, src, onclick, onerror, onload, data-*, aria-*, role,
 title, target, contenteditable, or any other attributes.
-The only permitted attribute is class with one or more allowed class names.
+Never use CSS url(), @import, expression(), position:fixed, position:absolute,
+z-index, behavior, -moz-binding, animation, transition, or external resources.
+The only permitted attributes are class and style.
 
 Use Unicode symbols sparingly:
 - Prediction: &#128302;
@@ -378,6 +384,38 @@ Use Unicode symbols sparingly:
 - Location: &#128205;
 - Confidence: &#127919;
 {_source_symbol_lines()}
+
+SELF-CONTAINED RESPONSIVE INLINE DESIGN:
+- The outer section must use:
+    style="box-sizing:border-box;width:100%;max-width:100%;display:flex;flex-direction:column;gap:14px;color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;overflow-wrap:anywhere;"
+- Every nested element must include box-sizing:border-box in its style.
+- Hero blocks should use padding:16px, border-radius:12px, background:#eff6ff,
+    and border-left:4px solid #2563eb. Warning heroes use #fffbeb and #d97706;
+    success heroes use #f0fdf4 and #16a34a.
+- Titles must use margin:0 and font-size:18px. Section headings must use
+    margin:0 0 8px and font-size:15px.
+- Card grids must use:
+    style="box-sizing:border-box;width:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;"
+- Cards must use padding:12px, border:1px solid #dbe3ef,
+    border-radius:10px, and background:#ffffff.
+- Notes must use padding:11px 13px, border-radius:8px, background:#f8fafc,
+    color:#475569, and font-size:13px.
+- Lists must use margin:0 and padding-left:22px.
+- Never rely on a class alone for appearance. Every visual element must carry
+    the corresponding inline style.
+
+RESPONSIVE TABLE INLINE DESIGN:
+- Wrap every table in a div with:
+    class="ai-table-wrap"
+    style="box-sizing:border-box;width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #cbd5e1;border-radius:10px;"
+- The table must use:
+    style="box-sizing:border-box;width:100%;min-width:720px;border-collapse:collapse;border-spacing:0;background:#ffffff;"
+- Every th must use:
+    style="box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;background:#f1f5f9;text-align:left;vertical-align:middle;font-weight:700;white-space:nowrap;"
+- Every td must use:
+    style="box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;text-align:left;vertical-align:middle;white-space:normal;"
+- Use min-width:120px on numeric table cells when helpful.
+- The overflow wrapper makes wide tables horizontally scrollable on phones.
 
 TABLE RULES:
 - Whenever two or more sources, locations, listings, periods, or options are
@@ -495,26 +533,50 @@ show a value from another source. Do not copy these instructions into the answer
         return """
 Create one ai-response section containing:
 1. An ai-hero ai-info block titled &#128200; Marketplace summary with a concise
-    statement of current remaining availability from period, currently active
-    listings from period, completed demand in period, and the leading source.
-2. An ai-grid with cards for Currently available from period, Active listings
+   title followed by one short interpretive summary paragraph.
+2. Build the opening summary from supplied facts only. Explain the most useful
+   pattern, such as the leading source, supply concentration, demand leader,
+   whether period supply exceeded demand, and whether meaningful inventory from
+   the period remains available now. Use at most two important numbers in this
+   paragraph. Do not output text that simply repeats card labels and values.
+3. An ai-grid with cards for Currently available from period, Active listings
     from period, Listed supply in period, and Completed demand in period.
-3. An ai-section titled Supply by renewable source containing one proper
-    ai-table with exactly these columns: Source, Currently available from period,
-    Listed supply in period, Completed demand in period, Market balance in
-    period, Average current asking price, and Average realized price. Include
-    all supported sources.
-4. An ai-section titled Period activity containing a proper ai-table for new
+4. An ai-section titled Supply by renewable source containing one proper
+    table with class ai-table and exactly these columns: Source, Currently
+    available from period, Listed supply in period, Completed demand in period,
+    Market balance in period, Average current asking price, and Average
+    realized price. Include all supported sources.
+5. An ai-section titled Period activity containing a proper ai-table for new
     listings in period, newly listed kWh in period, completed purchases in
     period, completed demand kWh in period, and realized price information
     supplied in API_CONTEXT.
-5. An ai-section titled Location highlights containing only supplied top-supply
+6. An ai-section titled Location highlights containing only supplied top-supply
     and top-demand locations. Clearly label that top-supply location reflects
     currently active listings created in the requested period.
-6. An ai-note ai-neutral block with the supplied data date or as-of timestamp.
+7. An ai-note ai-neutral block with the supplied data date or as-of timestamp.
 Do not present historical period-end inventory. "Currently available from
 period" means active listings created in the requested period that remain
-available now. Do not copy these instructions into the response.
+available now. The summary paragraph should read naturally, for example: one
+source accounted for most demand while another retained most available
+inventory, or listed supply exceeded completed demand during the period. Do not
+claim a shortage, surplus, trend, or cause unless the corresponding supplied
+metric supports it. Do not copy these instructions into the response.
+""".strip()
+
+    if intent == "historical_demand":
+        return """
+Create one ai-response section containing:
+1. An ai-hero ai-info block. The main finding must name the highest-demand
+    source and state that it had the most demand during the requested period,
+    using highest_demand_source and highest_demand_kwh.
+2. A Key metrics ai-table with Source, Demand (kWh), and Demand share (%).
+    Order rows exactly by demand_ranking_desc so the winner is first.
+3. When the question explicitly names sources, include only those requested
+    sources, while preserving descending demand order.
+4. A Period and method section with exact supplied dates and method.
+5. Include an ai-note for limitations only when limitations contains one or
+    more actual limitations. If limitations is empty, render no limitations text.
+Do not copy these instructions into the answer.
 """.strip()
 
     if intent in ANALYTICS_INTENTS:
@@ -616,7 +678,11 @@ STRICT CONTENT RULES:
 - If no matching records or aggregate data exist, state that no matching live
   marketplace data was found.
 - State exact historical and forecast periods when supplied.
+- Render data_as_of as a calendar date only in YYYY-MM-DD format. Never
+    display the time, timezone, or a truncated date.
 - State the calculation method when supplied.
+- If limitations is empty, omit the limitations section completely. Never write
+    "No limitations exist" or similar filler.
 - Use human-readable source labels: {_supported_sources_text()}.
 - Do not put document names or API tool names in the answer unless explicitly
   requested; the client renders sources and API usage separately.
@@ -635,6 +701,8 @@ API_CONTEXT:
 RAG_CONTEXT:
 {rag_context}
 
-Return only the safe HTML fragment. Do not return Markdown, JSON, code fences,
-a full HTML document, a style block, or explanatory text outside the fragment.
+Return only the safe, self-contained HTML fragment. Every visual element must
+include its responsive inline style because the frontend only assigns the answer
+to div.innerHTML. Do not return Markdown, JSON, code fences, a full HTML
+document, a style block, or explanatory text outside the fragment.
 """.strip()

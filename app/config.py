@@ -129,6 +129,10 @@ class Settings:
         "2.1.0",
     )
     DEBUG = _bool("DEBUG", False)
+    REFERRER_POLICY = os.getenv(
+        "REFERRER_POLICY",
+        "no-referrer",
+    ).strip()
 
     # -----------------------------------------------------------------------
     # AWS and Amazon Bedrock

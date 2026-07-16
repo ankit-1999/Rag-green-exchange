@@ -526,6 +526,7 @@ supply_by_location:
 
 marketplace_summary:
 - Use for: Summarize today's marketplace, Summarize marketplace activity, and Show platform statistics.
+- If no period is stated, including "Show platform statistics" and "Summarize marketplace activity", use DATE_CONTEXT.last_week_start through DATE_CONTEXT.last_week_end.
 - Must use get_active_listings, including for yesterday and last-week summaries.
 - get_active_listings represents credits still available for sale now.
 - For historical periods, analytics must retain only active listings whose created_at falls inside the requested period to measure remaining availability from that period.
@@ -1140,6 +1141,14 @@ def _history_range(
         return (
             dates["rolling_28_days_start"],
             dates["today"],
+        )
+
+    if intent == "marketplace_summary":
+        # Generic summary prompts without an explicit period should default to
+        # the previous completed calendar week.
+        return (
+            dates["last_week_start"],
+            dates["last_week_end"],
         )
 
     if supplied["from"] and supplied["to"]:
