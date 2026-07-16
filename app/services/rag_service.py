@@ -20,7 +20,7 @@ from __future__ import annotations
 import html
 from html.parser import HTMLParser
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import ValidationError
@@ -479,9 +479,13 @@ def _period_caption_fixed(api_summary: QueryApiSummary) -> str:
     start, end = _effective_period(api_summary)
     if not start or not end:
         return "the requested period"
-    today = datetime.now(timezone.utc).date().isoformat()
+    current_date = datetime.now(timezone.utc).date()
+    today = current_date.isoformat()
+    yesterday = (current_date - timedelta(days=1)).isoformat()
     if start == end == today:
         return f"today ({today})"
+    if start == end == yesterday:
+        return f"yesterday ({yesterday})"
     if start == end:
         return start
     return f"{start} to {end}"
