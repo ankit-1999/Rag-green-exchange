@@ -459,6 +459,262 @@ def _answer_mode(
 # ---------------------------------------------------------------------------
 
 
+def _render_marketplace_summary_html(
+    api_summary: QueryApiSummary,
+) -> str:
+    """Render complete responsive marketplace summary HTML deterministically."""
+    analytics = dict(api_summary.analytics_result or {})
+    period = analytics.get("period", {})
+    period_from = str(period.get("from") or "") if isinstance(period, Mapping) else ""
+    period_to = str(period.get("to") or "") if isinstance(period, Mapping) else ""
+    is_today = bool(analytics.get("is_current_day_summary", False))
+
+    listing_activity = analytics.get("period_listing_activity", {}) or {}
+    purchase_activity = analytics.get("period_purchase_activity", {}) or {}
+    source_stats = analytics.get("source_statistics", {}) or {}
+    balance = analytics.get("period_market_balance", {}) or {}
+    current_inventory = analytics.get("current_unsold_inventory_from_period", {}) or {}
+
+    period_label = _summary_period_label(period_from, period_to, is_today)
+    listed_total = _number_or_none(
+        listing_activity.get("newly_listed_supply_kwh_in_period")
+        or listing_activity.get("listed_supply_kwh")
+    )
+    demand_total = _number_or_none(
+        purchase_activity.get("completed_demand_kwh_in_period")
+        or purchase_activity.get("completed_demand_kwh")
+    )
+    available_total = _number_or_none(current_inventory.get("total_active_supply_kwh"))
+    listing_count = _int_or_zero(
+        listing_activity.get("new_listing_count_in_period")
+        or listing_activity.get("listing_count")
+    )
+    purchase_count = _int_or_zero(
+        purchase_activity.get("completed_purchase_count_in_period")
+        or purchase_activity.get("completed_purchase_count")
+    )
+
+    demand_by_source = purchase_activity.get("completed_demand_by_source_kwh_in_period", {}) or purchase_activity.get("completed_demand_by_source_kwh", {}) or {}
+    listed_by_source = listing_activity.get("newly_listed_supply_by_source_kwh_in_period", {}) or listing_activity.get("listed_supply_by_source_kwh", {}) or {}
+    balance_by_source = balance.get("market_balance_kwh_by_source", {}) or {}
+
+    demand_leader = _positive_leader(demand_by_source)
+    supply_leader = _positive_leader(listed_by_source)
+    summary = _marketplace_interpretation(
+        period_label=period_label,
+        listed_total=listed_total,
+        demand_total=demand_total,
+        available_total=available_total,
+        supply_leader=supply_leader,
+        demand_leader=demand_leader,
+    )
+
+    cards = [
+        ("Currently available from period", available_total, "kWh"),
+        ("Active listings from period", _int_or_zero(current_inventory.get("listing_count")), ""),
+        ("Listed supply in period", listed_total, "kWh"),
+        ("Completed demand in period", demand_total, "kWh"),
+    ]
+    card_html = "".join(
+        _metric_card(label, value, unit)
+        for label, value, unit in cards
+        if value is not None
+    )
+
+    candidates = [
+        ("Currently available from period", "available", "kWh"),
+        ("Listed supply in period", "listed", "kWh"),
+        ("Completed demand in period", "demand", "kWh"),
+        ("Market balance in period", "balance", "kWh"),
+        ("Average current asking price", "asking", ""),
+        ("Average realized price", "realized", ""),
+    ]
+    rows = []
+    for source in settings.SUPPORTED_ENERGY_SOURCES:
+        stats = source_stats.get(source, {}) if isinstance(source_stats, Mapping) else {}
+        rows.append({
+            "source": source.title(),
+            "available": _number_or_none(stats.get("currently_available_supply_kwh_from_period")),
+            "listed": _number_or_none(listed_by_source.get(source)),
+            "demand": _number_or_none(demand_by_source.get(source)),
+            "balance": _number_or_none(balance_by_source.get(source)),
+            "asking": _number_or_none(stats.get("average_current_asking_price_per_kwh")),
+            "realized": _number_or_none(stats.get("average_realized_price_per_kwh_in_period")),
+        })
+
+    visible_columns = [
+        column
+        for column in candidates
+        if any(row[column[1]] is not None for row in rows)
+    ]
+
+    source_table = _responsive_table(
+        headers=["Source"] + [column[0] for column in visible_columns],
+        rows=[
+            [row["source"]] + [_display_value(row[column[1]], column[2]) for column in visible_columns]
+            for row in rows
+        ],
+    ) if visible_columns else ""
+
+    activity_table = _responsive_table(
+        headers=["Activity", "Count", "kWh"],
+        rows=[
+            ["Listings in period", str(listing_count), _display_value(listed_total, "kWh")],
+            ["Completed purchases in period", str(purchase_count), _display_value(demand_total, "kWh")],
+        ],
+    )
+
+    data_as_of = str(api_summary.data_as_of or "")[:10]
+    scope_note = (
+        f"Period: {html.escape(period_label)}"
+        + (f" | Data as of: {html.escape(data_as_of)}" if len(data_as_of) == 10 else "")
+    )
+
+    return (
+        '<section class="ai-response" style="box-sizing:border-box;width:100%;max-width:100%;'
+        'display:flex;flex-direction:column;gap:14px;color:#172033;font-family:Arial,Helvetica,sans-serif;'
+        'font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
+        '<div class="ai-hero ai-info" style="box-sizing:border-box;padding:16px;border-radius:12px;'
+        'background:#eff6ff;border-left:4px solid #2563eb;">'
+        f'<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">&#128200; {html.escape(period_label)} marketplace summary</h3>'
+        f'<p style="box-sizing:border-box;margin:0;">{html.escape(summary)}</p></div>'
+        f'<div style="box-sizing:border-box;width:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">{card_html}</div>'
+        + (
+            '<section style="box-sizing:border-box;width:100%;">'
+            '<h4 style="box-sizing:border-box;margin:0 0 8px;font-size:15px;">Supply by renewable source</h4>'
+            f'{source_table}</section>'
+            if source_table else ""
+        )
+        + '<section style="box-sizing:border-box;width:100%;">'
+        '<h4 style="box-sizing:border-box;margin:0 0 8px;font-size:15px;">Period activity</h4>'
+        f'{activity_table}</section>'
+        '<div class="ai-note" style="box-sizing:border-box;padding:11px 13px;border-radius:8px;'
+        f'background:#f8fafc;color:#475569;font-size:13px;">{scope_note}</div>'
+        '</section>'
+    )
+
+
+def _summary_period_label(period_from: str, period_to: str, is_today: bool) -> str:
+    if is_today:
+        return "Today's"
+    if period_from and period_from == period_to:
+        return period_from
+    if period_from and period_to:
+        return f"{period_from} to {period_to}"
+    return "Marketplace"
+
+
+def _marketplace_interpretation(
+    period_label: str,
+    listed_total: Optional[float],
+    demand_total: Optional[float],
+    available_total: Optional[float],
+    supply_leader: Optional[str],
+    demand_leader: Optional[str],
+) -> str:
+    del period_label
+    parts: List[str] = []
+    if supply_leader and demand_leader:
+        if supply_leader == demand_leader:
+            parts.append(f"{supply_leader.title()} led both listed supply and completed demand during the period.")
+        else:
+            parts.append(f"{supply_leader.title()} led listed supply, while {demand_leader.title()} led completed demand during the period.")
+    elif supply_leader:
+        parts.append(f"{supply_leader.title()} contributed the most listed supply during the period.")
+    elif demand_leader:
+        parts.append(f"{demand_leader.title()} recorded the most completed demand during the period.")
+    else:
+        parts.append("No source recorded material listed supply or completed demand during the period.")
+
+    if listed_total is not None and demand_total is not None:
+        if listed_total > demand_total:
+            parts.append("Listed supply exceeded completed demand overall.")
+        elif listed_total < demand_total:
+            parts.append("Completed demand exceeded listed supply overall.")
+        else:
+            parts.append("Listed supply and completed demand were balanced overall.")
+
+    if available_total is not None and available_total > 0:
+        parts.append("Some inventory originating in the period remains available now.")
+    return " ".join(parts)
+
+
+def _metric_card(label: str, value: Any, unit: str) -> str:
+    return (
+        '<div class="ai-card" style="box-sizing:border-box;padding:12px;border:1px solid #dbe3ef;'
+        'border-radius:10px;background:#ffffff;">'
+        f'<div style="box-sizing:border-box;color:#64748b;font-size:12px;">{html.escape(label)}</div>'
+        f'<div style="box-sizing:border-box;font-size:17px;font-weight:700;">{html.escape(_display_value(value, unit))}</div>'
+        '</div>'
+    )
+
+
+def _responsive_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    if not headers or not rows:
+        return ""
+
+    th = "".join(
+        '<th style="box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;'
+        'background:#f1f5f9;text-align:left;vertical-align:middle;font-weight:700;white-space:nowrap;">'
+        f'{html.escape(str(value))}</th>'
+        for value in headers
+    )
+    body = "".join(
+        '<tr style="box-sizing:border-box;">'
+        + "".join(
+            '<td style="box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;'
+            'text-align:left;vertical-align:middle;white-space:normal;">'
+            f'{html.escape(str(value))}</td>'
+            for value in row
+        )
+        + '</tr>'
+        for row in rows
+    )
+    return (
+        '<div class="ai-table-wrap" style="box-sizing:border-box;width:100%;max-width:100%;'
+        'overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #cbd5e1;border-radius:10px;">'
+        '<table class="ai-table" style="box-sizing:border-box;width:100%;min-width:640px;'
+        'border-collapse:collapse;border-spacing:0;background:#ffffff;">'
+        f'<thead style="box-sizing:border-box;"><tr style="box-sizing:border-box;">{th}</tr></thead>'
+        f'<tbody style="box-sizing:border-box;">{body}</tbody></table></div>'
+    )
+
+
+def _display_value(value: Any, unit: str = "") -> str:
+    number = _number_or_none(value)
+    if number is None:
+        return "-"
+    rendered = str(int(number)) if float(number).is_integer() else f"{number:.2f}".rstrip("0").rstrip(".")
+    return f"{rendered} {unit}".strip()
+
+
+def _number_or_none(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _positive_leader(values: Any) -> Optional[str]:
+    if not isinstance(values, Mapping):
+        return None
+    valid = [
+        (str(key), number)
+        for key, value in values.items()
+        if (number := _number_or_none(value)) is not None and number > 0
+    ]
+    return max(valid, key=lambda item: item[1])[0] if valid else None
+
+
 def _append_collapsible_sources(
     answer: str,
     sources: Sequence[QuerySource],
@@ -584,13 +840,17 @@ def answer_question(request: QueryRequest) -> QueryResponse:
         ),
     )
 
-    try:
-        answer = bedrock_service.generate_answer(prompt)
-        if not answer.strip():
-            raise RuntimeError("Bedrock returned an empty answer.")
-    except (RuntimeError, ValueError) as exc:
-        logger.warning("Final answer generation unavailable: %s", exc)
-        answer = _build_fallback_answer(api_summary, hits, exc)
+    if str(plan.get("intent", "none")) == "marketplace_summary" and api_summary is not None:
+        # Deterministic rendering avoids LLM truncation for large inline-styled tables.
+        answer = _render_marketplace_summary_html(api_summary)
+    else:
+        try:
+            answer = bedrock_service.generate_answer(prompt)
+            if not answer.strip():
+                raise RuntimeError("Bedrock returned an empty answer.")
+        except (RuntimeError, ValueError) as exc:
+            logger.warning("Final answer generation unavailable: %s", exc)
+            answer = _build_fallback_answer(api_summary, hits, exc)
 
     # Keep source metadata outside response.answer. The frontend may ignore or
     # render QueryResponse.sources and api_summary.tool_results separately.
