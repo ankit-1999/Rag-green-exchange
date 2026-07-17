@@ -41,6 +41,7 @@ from app.services import (
     opensearch_service,
     prompt_service,
     tool_registry,
+    ui_constants,
 )
 
 logger = logging.getLogger(__name__)
@@ -507,16 +508,14 @@ def _requested_sources(api_summary: QueryApiSummary) -> List[str]:
 def _insufficient_answer(title: str, message: str, api_summary: Optional[QueryApiSummary]) -> str:
     data_as_of = str(getattr(api_summary, "data_as_of", "") or "")[:10] if api_summary else ""
     note = (
-        '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;'
-        f'color:#475569;font-size:13px;">Data as of: {html.escape(data_as_of)}</div>'
+        f'<div style="{ui_constants.NOTE_STYLE}">Data as of: {html.escape(data_as_of)}</div>'
         if len(data_as_of) == 10 else ""
     )
     return (
-        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;flex-direction:column;gap:14px;'
-        'color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
-        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#fffbeb;border-left:4px solid #d97706;">'
-        f'<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">{html.escape(title)}</h3>'
-        f'<p style="box-sizing:border-box;margin:0;">{html.escape(message)}</p></div>{note}</section>'
+        f'<section style="{ui_constants.SECTION_STYLE}">'
+        f'<div style="{ui_constants.HERO_WARNING_STYLE}">'
+        f'<h3 style="{ui_constants.HEADING_STYLE}">{html.escape(title)}</h3>'
+        f'<p style="{ui_constants.PARAGRAPH_STYLE}">{html.escape(message)}</p></div>{note}</section>'
     )
 
 
@@ -1050,14 +1049,14 @@ def _render_seller_recommendation_html(api_summary: QueryApiSummary) -> str:
     scores = recommendation.get("scores_by_source", {}) or {}
     factors = recommendation.get("factors_by_source", {}) or {}
 
-    if confidence == "insufficient_data":
-        finding = (
-            "There is insufficient completed marketplace history for a reliable listing recommendation."
-        )
-    elif no_preference or not source:
+    if no_preference or not source:
         finding = (
             "The available marketplace evidence does not show a strong preference "
             "for one renewable source."
+        )
+    elif confidence == "insufficient_data":
+        finding = (
+            f"{str(source).title()} appears to be the best listing option based on limited available history."
         )
     else:
         finding = (
@@ -1093,25 +1092,20 @@ def _render_seller_recommendation_html(api_summary: QueryApiSummary) -> str:
     limitation_html = ""
     if limitations:
         limitation_html = (
-            '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;'
-            'background:#fffbeb;color:#92400e;font-size:13px;">'
+            f'<div style="{ui_constants.LIMITATION_STYLE}">'
             + html.escape(" ".join(limitations))
             + "</div>"
         )
 
     return (
-        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;'
-        'flex-direction:column;gap:14px;color:#172033;font-family:Arial,Helvetica,sans-serif;'
-        'font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
-        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#f0fdf4;'
-        'border-left:4px solid #16a34a;">'
-        '<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">&#10024; Recommendation</h3>'
-        f'<p style="box-sizing:border-box;margin:0;">{html.escape(finding)}</p></div>'
-        '<section style="box-sizing:border-box;width:100%;">'
-        '<h4 style="box-sizing:border-box;margin:0 0 8px;font-size:15px;">Supporting metrics</h4>'
+        f'<section style="{ui_constants.SECTION_STYLE}">'
+        f'<div style="{ui_constants.HERO_SUCCESS_STYLE}">'
+        f'<h3 style="{ui_constants.HEADING_STYLE}">&#10024; Recommendation</h3>'
+        f'<p style="{ui_constants.PARAGRAPH_STYLE}">{html.escape(finding)}</p></div>'
+        f'<section style="{ui_constants.SUBSECTION_STYLE}">'
+        f'<h4 style="{ui_constants.SUBHEADING_STYLE}">Supporting metrics</h4>'
         f"{table}</section>"
-        '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;'
-        f'color:#475569;font-size:13px;">Confidence: {html.escape(confidence.replace("_", " ").title())}'
+        f'<div style="{ui_constants.NOTE_STYLE}">Confidence: {html.escape(confidence.replace("_", " ").title())}'
         + (f' | Data as of: {html.escape(data_as_of)}' if len(data_as_of) == 10 else "")
         + "</div>"
         + limitation_html
@@ -1151,31 +1145,13 @@ def _render_complete_api_fallback(api_summary: QueryApiSummary) -> str:
     table = _responsive_table(["Metric", "Value"], rows) if rows else ""
     data_as_of = str(api_summary.data_as_of or "")[:10]
     return (
-        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;'
-        'flex-direction:column;gap:14px;color:#172033;font-family:Arial,Helvetica,sans-serif;'
-        'font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
-        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#eff6ff;'
-        'border-left:4px solid #2563eb;">'
+        f'<section style="{ui_constants.SECTION_STYLE}">'
+        f'<div style="{ui_constants.HERO_INFO_STYLE}">'
         f'<h3 style="box-sizing:border-box;margin:0;font-size:18px;">{html.escape(_human_label(intent))}</h3></div>'
-        + (f'<section style="box-sizing:border-box;width:100%;">{table}</section>' if table else "")
-        + '<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;'
-        f'color:#475569;font-size:13px;">Data as of: {html.escape(data_as_of) if len(data_as_of) == 10 else "-"}</div>'
+        + (f'<section style="{ui_constants.SUBSECTION_STYLE}">{table}</section>' if table else "")
+        + f'<div style="{ui_constants.NOTE_STYLE}">Data as of: {html.escape(data_as_of) if len(data_as_of) == 10 else "-"}</div>'
         "</section>"
     )
-
-
-def _period_caption(api_summary: QueryApiSummary) -> str:
-    period = api_summary.historical_period
-    start = str(getattr(period, "from_date", "") or "") if period else ""
-    end = str(getattr(period, "to_date", "") or "") if period else ""
-    if not start or not end:
-        return "the requested period"
-    today = datetime.now(timezone.utc).date().isoformat()
-    if start == end == today:
-        return f"today ({today})"
-    if start == end:
-        return start
-    return f"{start} to {end}"
 
 
 def _filter_argument(api_summary: QueryApiSummary, key: str) -> Optional[str]:
@@ -1378,88 +1354,18 @@ def _render_standard_answer(
     note = " | ".join(note_parts)
 
     return (
-        '<section style="box-sizing:border-box;width:100%;max-width:100%;display:flex;flex-direction:column;gap:14px;'
-        'color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;overflow-wrap:anywhere;">'
-        '<div style="box-sizing:border-box;padding:16px;border-radius:12px;background:#eff6ff;border-left:4px solid #2563eb;">'
-        f'<h3 style="box-sizing:border-box;margin:0 0 6px;font-size:18px;">{html.escape(title)}</h3>'
-        f'<p style="box-sizing:border-box;margin:0;">{html.escape(finding)}</p></div>'
-        + (f'<section style="box-sizing:border-box;width:100%;">{table}</section>' if table else "")
+        f'<section style="{ui_constants.SECTION_STYLE}">'
+        f'<div style="{ui_constants.HERO_INFO_STYLE}">'
+        f'<h3 style="{ui_constants.HEADING_STYLE}">{html.escape(title)}</h3>'
+        f'<p style="{ui_constants.PARAGRAPH_STYLE}">{html.escape(finding)}</p></div>'
+        + (f'<section style="{ui_constants.SUBSECTION_STYLE}">{table}</section>' if table else "")
         + (
-            f'<div style="box-sizing:border-box;padding:11px 13px;border-radius:8px;background:#f8fafc;color:#475569;font-size:13px;">{html.escape(note)}</div>'
+            f'<div style="{ui_constants.NOTE_STYLE}">{html.escape(note)}</div>'
             if note
             else ""
         )
         + "</section>"
     )
-
-
-def _append_collapsible_sources(
-    answer: str,
-    sources: Sequence[QuerySource],
-    api_summary: Optional[QueryApiSummary],
-) -> str:
-    """Append one collapsible source section after the complete answer."""
-    document_names: List[str] = []
-    for source in sources:
-        name = str(getattr(source, "document_name", "") or "").strip()
-        if name and name not in document_names:
-            document_names.append(name)
-
-    tool_names: List[str] = []
-    if api_summary is not None:
-        for result in list(getattr(api_summary, "tool_results", []) or []):
-            name = str(getattr(result, "tool", "") or "").strip()
-            if name and name not in tool_names:
-                tool_names.append(name)
-
-    if not document_names and not tool_names:
-        return answer
-
-    sections: List[str] = []
-    if document_names:
-        document_items = "".join(
-            (
-                '<li style="box-sizing:border-box;margin:0;padding:0;">'
-                f'&#128196; {html.escape(name)}'
-                "</li>"
-            )
-            for name in document_names
-        )
-        sections.append(
-            '<div style="box-sizing:border-box;display:flex;flex-direction:column;gap:6px;">'
-            '<strong style="box-sizing:border-box;">Documents</strong>'
-            '<ul style="box-sizing:border-box;margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px;">'
-            f"{document_items}</ul></div>"
-        )
-
-    if tool_names:
-        tool_items = "".join(
-            (
-                '<li style="box-sizing:border-box;margin:0;padding:0;">'
-                f'&#127760; {html.escape(name)}'
-                "</li>"
-            )
-            for name in tool_names
-        )
-        sections.append(
-            '<div style="box-sizing:border-box;display:flex;flex-direction:column;gap:6px;">'
-            '<strong style="box-sizing:border-box;">Marketplace Data</strong>'
-            '<ul style="box-sizing:border-box;margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px;">'
-            f"{tool_items}</ul></div>"
-        )
-
-    disclosure = (
-        '<details style="box-sizing:border-box;width:100%;max-width:100%;margin-top:14px;'
-        'padding:10px 12px;border:1px solid #dbe3ef;border-radius:10px;'
-        'background:#f8fafc;color:#334155;">'
-        '<summary style="box-sizing:border-box;cursor:pointer;font-weight:700;'
-        'list-style-position:inside;">&#128204; Sources Used</summary>'
-        '<div style="box-sizing:border-box;display:flex;flex-direction:column;gap:12px;'
-        'margin-top:10px;">'
-        + "".join(sections)
-        + "</div></details>"
-    )
-    return f"{answer.rstrip()}\n{disclosure}"
 
 
 def _clear_embedded_source_metadata(

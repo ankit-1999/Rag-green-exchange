@@ -36,6 +36,7 @@ SUPPORTED_SOURCES: Tuple[str, ...] = tuple(
 )
 COMPLETED_PURCHASE_STATUSES = {"completed", "consumed"}
 ACTIVE_LISTING_STATUS = "active"
+CANCELLED_LISTING_STATUS = "cancelled"
 
 SOURCE_ALIASES = {
     "solar": "SOLAR", "solar_energy": "SOLAR", "solar energy": "SOLAR", "solar power": "SOLAR",
@@ -271,6 +272,8 @@ def _clean_listings(records: Sequence[Mapping[str, Any]], active_only: bool = Fa
         if source is None or energy is None or energy <= 0:
             continue
         status = str(raw.get("status", "ACTIVE" if active_only else "")).strip().lower()
+        if status == CANCELLED_LISTING_STATUS:
+            continue
         is_available = raw.get("is_available", True if active_only else None)
         if active_only and not (status == ACTIVE_LISTING_STATUS and is_available is not False):
             continue
@@ -326,9 +329,6 @@ def _marketplace_summary(
     active_records = datasets.get("active_listings", [])
     listing_records = datasets.get("all_listings", [])
     purchase_records = datasets.get("purchases", [])
-    active_aggregates = aggregates.get("active_listings", {})
-    listing_aggregates = aggregates.get("all_listings", {})
-    purchase_aggregates = aggregates.get("purchases", {})
 
     period = plan.get("historical_period", {})
     period_from = period.get("from") if isinstance(period, Mapping) else None
@@ -473,50 +473,6 @@ def _highest_location_from_records(records: Sequence[Mapping[str, Any]]) -> Opti
 def _highest_location_value_from_records(records: Sequence[Mapping[str, Any]]) -> Optional[float]:
     _, value = _positive_max_item(_active_location_totals(records))
     return _round(value)
-
-
-def _location_totals_from_aggregate(value: Any, metric: str) -> Dict[str, float]:
-    totals: Dict[str, float] = {}
-    if not isinstance(value, Mapping):
-        return totals
-    for location, source_map in value.items():
-        if not isinstance(source_map, Mapping):
-            continue
-        totals[str(location)] = sum(
-            _number(stats.get(metric)) or 0.0
-            for stats in source_map.values()
-            if isinstance(stats, Mapping)
-        )
-    return totals
-
-
-def _aggregate_purchase_count(aggregates: Mapping[str, Any]) -> int:
-    """Count completed purchases from demand_by_source aggregate when records are sparse."""
-    demand = aggregates.get("demand_by_source", {}) if isinstance(aggregates, Mapping) else {}
-    if not isinstance(demand, Mapping):
-        return 0
-    total = 0
-    for source in SUPPORTED_SOURCES:
-        stats = demand.get(source, {})
-        if isinstance(stats, Mapping):
-            total += int(_number(stats.get("total_purchases")) or 0)
-    return total
-
-
-def _aggregate_listing_count(aggregates: Mapping[str, Any]) -> int:
-    """Count listings from supply_by_source aggregate when records are sparse."""
-    supply = aggregates.get("supply_by_source", {}) if isinstance(aggregates, Mapping) else {}
-    if not isinstance(supply, Mapping):
-        return 0
-    total = 0
-    for source in SUPPORTED_SOURCES:
-        statuses = supply.get(source, {})
-        if not isinstance(statuses, Mapping):
-            continue
-        for stats in statuses.values():
-            if isinstance(stats, Mapping):
-                total += int(_number(stats.get("total_listings")) or _number(stats.get("listings")) or 0)
-    return total
 
 
 def _active_totals(records: Sequence[Mapping[str, Any]], aggregates: Mapping[str, Any]) -> Dict[str, float]:
@@ -755,7 +711,11 @@ def _predict_demand(purchases: Sequence[Mapping[str, Any]], plan: Mapping[str, A
     confidence = _prediction_confidence(len(purchases), history_periods)
     limits = ["Future marketplace demand is not guaranteed."]
     if confidence == "insufficient_data":
-        limits.insert(0, _minimum_prediction_data_message())
+        if eligible:
+            confidence = "low"
+            limits.insert(0, "Demand forecast uses limited completed-purchase history and should be treated as directional.")
+        else:
+            limits.insert(0, _minimum_prediction_data_message())
     return {"metric": "completed_demand_kwh", "model": "recursive_four_period_weighted_moving_average", "forecast_weeks": periods, "predictions_by_source": results, "predicted_highest_demand_source": winner, "predicted_highest_demand_kwh": _round(value), "historical_purchase_records": len(purchases), "historical_periods": history_periods}, confidence, limits
 
 
@@ -777,7 +737,11 @@ def _predict_price(purchases: Sequence[Mapping[str, Any]], aggregates: Mapping[s
     confidence = _prediction_confidence(len(purchases), periods)
     limits = ["Predicted prices are estimates and are not guaranteed."]
     if confidence == "insufficient_data":
-        limits.insert(0, "Insufficient historical completed-price data for a reliable forecast.")
+        if eligible:
+            confidence = "low"
+            limits.insert(0, "Price forecast uses limited completed-price history and should be treated as directional.")
+        else:
+            limits.insert(0, "Insufficient historical completed-price data for a reliable forecast.")
     return {"metric": "realized_price_per_kwh", "model": model, "used_backend_monthly_price_trend": use_monthly, "predictions_by_source": results, "predicted_highest_price_source": winner, "predicted_highest_price_per_kwh": _round(value, 8), "historical_purchase_records": len(purchases), "historical_periods": periods}, confidence, limits
 
 
@@ -801,7 +765,11 @@ def _predict_shortage(listings, active_listings, purchases, plan) -> Tuple[Dict[
     confidence = _prediction_confidence(len(filtered_purchases), min(len(supply_values), len(demand_values)))
     limits = ["Projected shortage or surplus is an estimate, not a guarantee."]
     if confidence == "insufficient_data":
-        limits.insert(0, "Insufficient matching location and source history for a reliable shortage forecast.")
+        if predicted_supply is not None and predicted_demand is not None:
+            confidence = "low"
+            limits.insert(0, "Shortage forecast uses limited matching history and should be treated as directional.")
+        else:
+            limits.insert(0, "Insufficient matching location and source history for a reliable shortage forecast.")
     return {"metric": "projected_market_balance_kwh", "energy_source": source, "location": location, "forecast_weeks": periods, "predicted_new_supply_kwh": _round(predicted_supply), "current_active_supply_kwh": _round(active_inventory), "predicted_demand_kwh": _round(predicted_demand), "projected_gap_kwh": _round(gap), "shortage_expected": gap < 0 if gap is not None else None, "model": "recursive_four_period_weighted_moving_average"}, confidence, limits
 
 
@@ -831,9 +799,19 @@ def _seller_recommendation(listings, active_listings, purchases) -> Tuple[Dict[s
     periods = max((len(_weekly_energy_by_source(purchases, "completed_at")[source]) for source in SUPPORTED_SOURCES), default=0)
     confidence = _prediction_confidence(len(purchases), periods)
     limits = ["Recommendation is decision support and does not guarantee a sale."]
+
+    total_supply = sum(float(value or 0.0) for value in supply.values())
+    total_demand = sum(float(value or 0.0) for value in demand.values())
+    has_actionable_signal = bool(ranked) and total_supply > 0 and total_demand > 0
+
     if confidence == "insufficient_data":
-        limits.insert(0, "Insufficient completed-purchase history for a reliable listing recommendation.")
-    recommendation = None if no_preference or confidence == "insufficient_data" else (ranked[0][0] if ranked else None)
+        if has_actionable_signal:
+            confidence = "low"
+            limits.insert(0, "Recommendation uses limited completed-purchase history and should be treated as directional.")
+        else:
+            limits.insert(0, "Insufficient completed-purchase history for a reliable listing recommendation.")
+
+    recommendation = None if no_preference else (ranked[0][0] if ranked else None)
     return {"recommended_source": recommendation, "no_strong_preference": no_preference, "scores_by_source": scores, "factors_by_source": factors, "ranking": [source for source, _ in ranked]}, confidence, limits
 
 
@@ -898,8 +876,20 @@ def _weekly_series(records, timestamp_field, value_field, weighted_price):
 
 def _recursive_forecast(values: Sequence[float], periods: int, price: bool) -> Dict[str, Any]:
     key = "predicted_forecast_period_price_per_kwh" if price else "predicted_forecast_period_kwh"
-    if len(values) < 2:
+    if len(values) == 0:
         return {key: None, "lower_bound": None, "upper_bound": None, "periods_used": len(values), "reason": "At least two historical periods are required."}
+    if len(values) == 1:
+        single = float(values[0])
+        predicted = single if price else single * max(1, periods)
+        digits = 8 if price else 2
+        return {
+            key: _round(predicted, digits),
+            "lower_bound": _round(max(0.0, predicted), digits),
+            "upper_bound": _round(max(0.0, predicted), digits),
+            "periods_used": 1,
+            "forecast_periods": max(1, periods),
+            "reason": "Single historical period fallback.",
+        }
     base_weights = [0.1, 0.2, 0.3, 0.4]
     working = list(values)
     residuals = []

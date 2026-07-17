@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -535,7 +535,7 @@ supply_by_location:
 
 marketplace_summary:
 - Use for: Summarize today's marketplace, Summarize marketplace activity, and Show platform statistics.
-- If no period is stated, including "Show platform statistics" and "Summarize marketplace activity", use DATE_CONTEXT.last_week_start through DATE_CONTEXT.last_week_end.
+- If no period is stated, do not invent one. Use all available marketplace data without created/completed date filters.
 - Must use get_active_listings, including for yesterday and last-week summaries.
 - get_active_listings represents credits still available for sale now.
 - For historical periods, analytics must retain only active listings whose created_at falls inside the requested period to measure remaining availability from that period.
@@ -566,26 +566,26 @@ price_volatility:
 demand_prediction:
 - Must use get_all_listings and get_all_purchases.
 - Purchases must use status=COMPLETED.
-- Use at least the previous 180 days unless a longer valid period is supplied.
+- If the user does not specify a history period, use all available completed/listed data (no historical date filters).
 - For a general highest-demand question, do not apply a source filter; compare
   SOLAR, WIND, HYDRO, BIOMASS, GEOTHERMAL, TIDAL, and OTHER.
 
 price_prediction:
 - Must use get_all_purchases and get_active_listings.
 - Purchases must use status=COMPLETED and group_by_month=true.
-- Use at least the previous 180 days of purchase history.
+- If the user does not specify a history period, use all available purchase history (no completed date filters).
 - For a general source prediction, do not apply one source filter.
 
 shortage_prediction:
 - Must use get_all_listings, get_all_purchases, and get_active_listings.
 - Apply the same source and location to all three tools when supplied.
 - Purchases must use status=COMPLETED.
-- Use at least the previous 180 days of history.
+- If the user does not specify a history period, use all available matching history (no historical date filters).
 
 seller_recommendation:
 - Must use get_all_listings, get_all_purchases, and get_active_listings.
 - Purchases must use status=COMPLETED.
-- Use the previous 28 days for a this-week listing recommendation.
+- If the user does not specify a history period, use all available marketplace history (no historical date filters).
 - If the user names multiple sources, compare only those sources in analytics but
   do not incorrectly apply one source filter to all API calls.
 - If no sources are named, compare every supported source.
@@ -602,8 +602,7 @@ DATE RULES:
 - this month -> DATE_CONTEXT.this_month_start through DATE_CONTEXT.this_month_to_date_end
 - last month -> DATE_CONTEXT.last_month_start through DATE_CONTEXT.last_month_end
 - next month -> DATE_CONTEXT.next_month_start through DATE_CONTEXT.next_month_end
-- Predictions without an explicit history use rolling_180_days_start through today.
-- Seller recommendations for this week use rolling_28_days_start through today.
+- If historical dates are not specified, keep historical_period.from/to as null and do not add created/completed date filters.
 - Next-month dates are the forecast period, never historical API filters.
 - If the user says selected period without supplying one, add date_range to
   missing_parameters and do not invent a date range.
@@ -661,7 +660,7 @@ Question: Which location has the greatest Tidal-credit supply?
 Result: supply_by_location, get_active_listings, energy_source TIDAL, group by location.
 
 Question: Should I list Solar or Wind credits this week?
-Result: seller_recommendation, all three tools, previous 28 days, compare the two
+Result: seller_recommendation, all three tools, use available history unless the user gives explicit dates, compare the two
 requested sources without applying one source as the sole API filter.
 
 SAFETY RULES:
@@ -1290,61 +1289,15 @@ def _history_range(
     intent: str,
     period: Any,
     dates: Mapping[str, str],
-) -> tuple[str, str]:
+) -> Tuple[Optional[str], Optional[str]]:
+    del intent
+    del dates
     supplied = _period(period)
-
-    if intent in PREDICTION_INTENTS:
-        if supplied["from"] and supplied["to"]:
-            try:
-                start = date.fromisoformat(
-                    supplied["from"][:10]
-                )
-                end = date.fromisoformat(
-                    supplied["to"][:10]
-                )
-                if (
-                    (end - start).days
-                    >= settings.ANALYTICS_DEFAULT_HISTORY_DAYS - 1
-                ):
-                    return supplied["from"], supplied["to"]
-            except ValueError:
-                pass
-
-        return (
-            dates["rolling_180_days_start"],
-            dates["today"],
-        )
-
-    if intent in {
-        "supply_stability",
-        "price_volatility",
-    }:
-        return (
-            dates["rolling_180_days_start"],
-            dates["today"],
-        )
-
-    if intent == "seller_recommendation":
-        return (
-            dates["rolling_28_days_start"],
-            dates["today"],
-        )
-
-    if intent == "marketplace_summary":
-        # Generic summary prompts without an explicit period should default to
-        # the previous completed calendar week.
-        return (
-            dates["last_week_start"],
-            dates["last_week_end"],
-        )
 
     if supplied["from"] and supplied["to"]:
         return supplied["from"], supplied["to"]
 
-    return (
-        dates["rolling_28_days_start"],
-        dates["today"],
-    )
+    return None, None
 
 
 # ---------------------------------------------------------------------------
