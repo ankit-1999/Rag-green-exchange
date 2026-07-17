@@ -543,16 +543,84 @@ def _prediction_has_result(api_summary: QueryApiSummary, keys: Sequence[str]) ->
 
 
 def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
-    source = _filter_argument(api_summary, "energy_source") or "renewable"
+    prediction = dict(api_summary.prediction_result or {})
+    source = (_filter_argument(api_summary, "energy_source") or "").upper()
     location = _filter_argument(api_summary, "location")
-    if not _prediction_has_result(api_summary, ("predicted_highest_demand_kwh", "predicted_demand_kwh", "forecast_by_source")):
-        scope = f"{source.title()} credits" + (f" in {location}" if location else "")
+    forecast_label = _forecast_caption(api_summary)
+    if not _prediction_has_result(api_summary, ("predicted_highest_demand_kwh", "predictions_by_source")):
+        scope_source = source.title() if source else "renewable"
+        scope = f"{scope_source} credits" + (f" in {location}" if location else "")
         return _insufficient_answer(
             "Demand prediction unavailable",
-            f"Due to insufficient historical purchase records and demand forecasting data for {scope}, I cannot predict next month's demand.",
+            f"Due to insufficient historical purchase records and demand forecasting data for {scope}, I cannot predict demand during {forecast_label}.",
             api_summary,
         )
-    return _render_complete_api_fallback(api_summary)
+
+    predictions = prediction.get("predictions_by_source") if isinstance(prediction, Mapping) else {}
+    if not isinstance(predictions, Mapping):
+        predictions = {}
+
+    model = str(prediction.get("model") or "weighted moving average")
+    if source and source in predictions and isinstance(predictions.get(source), Mapping):
+        item = dict(predictions[source] or {})
+        predicted = _number_or_none(item.get("predicted_forecast_period_kwh"))
+        last_observed = _number_or_none(item.get("last_observed_period_kwh"))
+        change_pct = _number_or_none(item.get("forecast_change_pct"))
+        trend_text = "is expected to stay roughly flat"
+        if change_pct is not None:
+            if change_pct > 0:
+                trend_text = f"is expected to increase by about {_display_value(abs(change_pct), '%')}"
+            elif change_pct < 0:
+                trend_text = f"is expected to decrease by about {_display_value(abs(change_pct), '%')}"
+        scope = f"{source.title()} demand" + (f" in {location}" if location else "")
+        finding = (
+            f"{scope} during {forecast_label} is projected at {_display_value(predicted, 'kWh')}. "
+            f"Compared with the latest observed period ({_display_value(last_observed, 'kWh')}), demand {trend_text}."
+        )
+        detail = (
+            "Calculation: recursive weighted moving average over recent completed-demand periods. "
+            "Trend signal compares forecast demand with the most recent observed period."
+        )
+        table = _responsive_table(
+            ["Scope", "Forecast demand", "Latest observed demand", "Expected change"],
+            [[scope, _display_value(predicted, "kWh"), _display_value(last_observed, "kWh"), _trend_display(change_pct)]],
+        )
+        return _render_standard_answer(
+            "Demand prediction",
+            finding,
+            table + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            api_summary,
+            forecast_label,
+        )
+
+    leader = str(prediction.get("predicted_highest_demand_source") or "")
+    leader_kwh = _number_or_none(prediction.get("predicted_highest_demand_kwh"))
+    finding = (
+        f"{leader.title()} is projected to have the highest demand during {forecast_label}, at about {_display_value(leader_kwh, 'kWh')}."
+        if leader else
+        f"Demand was forecast during {forecast_label}, but no clear leading source was identified."
+    )
+    rows: List[List[str]] = []
+    for source_name in settings.SUPPORTED_ENERGY_SOURCES:
+        item = predictions.get(source_name, {}) if isinstance(predictions.get(source_name), Mapping) else {}
+        rows.append([
+            source_name.title(),
+            _display_value(item.get("predicted_forecast_period_kwh"), "kWh"),
+            _display_value(item.get("last_observed_period_kwh"), "kWh"),
+            _trend_display(item.get("forecast_change_pct")),
+        ])
+    detail = (
+        "Calculation: recursive weighted moving average over recent completed-demand periods by source. "
+        "Trend signal compares each source forecast with its latest observed period."
+    )
+    return _render_standard_answer(
+        "Demand prediction",
+        finding,
+        _responsive_table(["Source", "Forecast demand", "Latest observed demand", "Expected change"], rows)
+        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+        api_summary,
+        forecast_label,
+    )
 
 
 def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
@@ -589,8 +657,8 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
                 _display_value(value.get("current_active_supply_kwh"), "kWh"),
                 _display_value(value.get("projected_gap_kwh"), "kWh"),
                 "Yes" if value.get("shortage_expected") else "No",
-                _display_value(value.get("demand_trend_pct"), "%"),
-                _display_value(value.get("supply_trend_pct"), "%"),
+                _trend_display(value.get("demand_trend_pct")),
+                _trend_display(value.get("supply_trend_pct")),
             ])
         detail = (
             "Calculation: projected gap = forecast new supply + current active supply - forecast demand. "
@@ -621,8 +689,8 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
         _display_value(prediction.get("predicted_new_supply_kwh"), "kWh"),
         _display_value(prediction.get("current_active_supply_kwh"), "kWh"),
         _display_value(prediction.get("projected_gap_kwh"), "kWh"),
-        _display_value(prediction.get("demand_trend_pct"), "%"),
-        _display_value(prediction.get("supply_trend_pct"), "%"),
+        _trend_display(prediction.get("demand_trend_pct")),
+        _trend_display(prediction.get("supply_trend_pct")),
     ]]
     return _render_standard_answer(
         "Upcoming shortage prediction",
@@ -636,13 +704,76 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
 
 
 def _render_price_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
-    if not _prediction_has_result(api_summary, ("predicted_highest_price_source", "predicted_highest_price_per_kwh", "forecast_by_source")):
+    prediction = dict(api_summary.prediction_result or {})
+    source = (_filter_argument(api_summary, "energy_source") or "").upper()
+    forecast_label = _forecast_caption(api_summary)
+    if not _prediction_has_result(api_summary, ("predicted_highest_price_source", "predictions_by_source")):
         return _insufficient_answer(
             "Price prediction unavailable",
-            "Due to insufficient historical purchase records and pricing trends, I cannot predict which renewable source will have the highest price next month.",
+            f"Due to insufficient historical purchase records and pricing trends, I cannot produce a reliable price forecast for {forecast_label}.",
             api_summary,
         )
-    return _render_complete_api_fallback(api_summary)
+
+    predictions = prediction.get("predictions_by_source") if isinstance(prediction, Mapping) else {}
+    if not isinstance(predictions, Mapping):
+        predictions = {}
+
+    if source and source in predictions and isinstance(predictions.get(source), Mapping):
+        item = dict(predictions[source] or {})
+        predicted = _number_or_none(item.get("predicted_forecast_period_price_per_kwh"))
+        low = _number_or_none(item.get("lower_bound"))
+        high = _number_or_none(item.get("upper_bound"))
+        change_pct = _number_or_none(item.get("forecast_change_pct"))
+        finding = (
+            f"{source.title()} price during {forecast_label} is projected around {_display_value(predicted, 'per kWh')} "
+            f"with an estimated range of {_display_value(low, 'per kWh')} to {_display_value(high, 'per kWh')}."
+        )
+        detail = (
+            "Calculation: weighted moving-average forecast from realized completed-purchase prices. "
+            "Range is reported as lower and upper uncertainty bounds from the forecast error band."
+        )
+        table = _responsive_table(
+            ["Source", "Forecast price", "Price range", "Expected change"],
+            [[source.title(), _display_value(predicted, "per kWh"), f"{_display_value(low)} to {_display_value(high)}", _trend_display(change_pct)]],
+        )
+        return _render_standard_answer(
+            "Price prediction",
+            finding,
+            table + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            api_summary,
+            forecast_label,
+        )
+
+    leader = str(prediction.get("predicted_highest_price_source") or "")
+    leader_price = _number_or_none(prediction.get("predicted_highest_price_per_kwh"))
+    finding = (
+        f"{leader.title()} is projected to have the highest price during {forecast_label}, around {_display_value(leader_price, 'per kWh')}."
+        if leader else
+        f"A price forecast was generated for {forecast_label}, but no single source clearly leads."
+    )
+    rows: List[List[str]] = []
+    for source_name in settings.SUPPORTED_ENERGY_SOURCES:
+        item = predictions.get(source_name, {}) if isinstance(predictions.get(source_name), Mapping) else {}
+        low = _number_or_none(item.get("lower_bound"))
+        high = _number_or_none(item.get("upper_bound"))
+        rows.append([
+            source_name.title(),
+            _display_value(item.get("predicted_forecast_period_price_per_kwh"), "per kWh"),
+            f"{_display_value(low)} to {_display_value(high)}",
+            _trend_display(item.get("forecast_change_pct")),
+        ])
+    detail = (
+        "Calculation: weighted moving-average forecast from realized completed-purchase prices by source. "
+        "Ranges are lower and upper uncertainty bounds from forecast error."
+    )
+    return _render_standard_answer(
+        "Price prediction",
+        finding,
+        _responsive_table(["Source", "Forecast price", "Price range", "Expected change"], rows)
+        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+        api_summary,
+        forecast_label,
+    )
 
 
 def _render_ratio_html(api_summary: QueryApiSummary) -> str:
@@ -1037,6 +1168,19 @@ def _display_value(value: Any, unit: str = "") -> str:
         return "-"
     rendered = str(int(number)) if float(number).is_integer() else f"{number:.2f}".rstrip("0").rstrip(".")
     return f"{rendered} {unit}".strip()
+
+
+def _trend_display(value: Any) -> str:
+    number = _number_or_none(value)
+    if number is None:
+        return "-"
+    magnitude = abs(number)
+    rendered = str(int(magnitude)) if float(magnitude).is_integer() else f"{magnitude:.2f}".rstrip("0").rstrip(".")
+    if number > 0:
+        return f"Up {rendered}%"
+    if number < 0:
+        return f"Down {rendered}%"
+    return "Flat"
 
 
 def _number_or_none(value: Any) -> Optional[float]:

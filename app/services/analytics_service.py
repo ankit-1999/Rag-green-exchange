@@ -705,6 +705,15 @@ def _predict_demand(purchases: Sequence[Mapping[str, Any]], plan: Mapping[str, A
     weekly = _weekly_energy_by_source(purchases, "completed_at")
     periods = _forecast_periods(plan)
     results = {source: _recursive_forecast([value for _, value in weekly[source]], periods, price=False) for source in SUPPORTED_SOURCES}
+    for source in SUPPORTED_SOURCES:
+        values = [value for _, value in weekly[source]]
+        predicted = _number(results[source].get("predicted_forecast_period_kwh"))
+        last_observed = values[-1] if values else None
+        change_pct = None
+        if predicted is not None and last_observed is not None and last_observed > 0:
+            change_pct = ((predicted - last_observed) / last_observed) * 100
+        results[source]["last_observed_period_kwh"] = _round(last_observed)
+        results[source]["forecast_change_pct"] = _round(change_pct, 2) if change_pct is not None else None
     eligible = {source: result.get("predicted_forecast_period_kwh") for source, result in results.items() if result.get("predicted_forecast_period_kwh") is not None}
     winner, value = _max_item(eligible)
     history_periods = max((len(weekly[source]) for source in SUPPORTED_SOURCES), default=0)
@@ -722,16 +731,28 @@ def _predict_demand(purchases: Sequence[Mapping[str, Any]], plan: Mapping[str, A
 def _predict_price(purchases: Sequence[Mapping[str, Any]], aggregates: Mapping[str, Any], plan: Mapping[str, Any]) -> Tuple[Dict[str, Any], str, List[str]]:
     monthly = _parse_monthly_price_trend(aggregates.get("monthly_price_trend") if isinstance(aggregates, Mapping) else None)
     use_monthly = any(monthly[source] for source in SUPPORTED_SOURCES)
+    source_series: Dict[str, List[float]] = {source: [] for source in SUPPORTED_SOURCES}
     if use_monthly:
         results = {source: _recursive_forecast([value for _, value in monthly[source]], 1, price=True) for source in SUPPORTED_SOURCES}
+        source_series = {source: [value for _, value in monthly[source]] for source in SUPPORTED_SOURCES}
         periods = max((len(monthly[source]) for source in SUPPORTED_SOURCES), default=0)
         model = "monthly_api_price_trend_weighted_moving_average"
     else:
         weekly = _weekly_series(purchases, "completed_at", "price_per_kwh", True)
         forecast_periods = _forecast_periods(plan)
         results = {source: _recursive_forecast([value for _, value in weekly[source]], forecast_periods, price=True) for source in SUPPORTED_SOURCES}
+        source_series = {source: [value for _, value in weekly[source]] for source in SUPPORTED_SOURCES}
         periods = max((len(weekly[source]) for source in SUPPORTED_SOURCES), default=0)
         model = "weekly_weighted_moving_average"
+    for source in SUPPORTED_SOURCES:
+        values = source_series.get(source, [])
+        predicted = _number(results[source].get("predicted_forecast_period_price_per_kwh"))
+        last_observed = values[-1] if values else None
+        change_pct = None
+        if predicted is not None and last_observed is not None and last_observed > 0:
+            change_pct = ((predicted - last_observed) / last_observed) * 100
+        results[source]["last_observed_price_per_kwh"] = _round(last_observed, 8)
+        results[source]["forecast_change_pct"] = _round(change_pct, 2) if change_pct is not None else None
     eligible = {source: result.get("predicted_forecast_period_price_per_kwh") for source, result in results.items() if result.get("predicted_forecast_period_price_per_kwh") is not None}
     winner, value = _max_item(eligible)
     confidence = _prediction_confidence(len(purchases), periods)

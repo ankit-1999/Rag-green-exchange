@@ -960,10 +960,18 @@ def _enforce_question_semantics(
 
     # Deterministic intent repair for prediction, recommendation, pricing,
     # ratio, historical-shortage, and recent-listing questions.
+    demand_terms = ("demand", "needs", "consumption")
+    price_terms = ("price", "pricing", "appreciate", "appreciation")
+    supply_terms = ("supply", "availability", "listings", "listed")
+
     if "demand to supply ratio" in normalized or "demand supply ratio" in normalized:
         enforced["intent"] = "demand_supply_ratio"
     elif "highest price" in normalized and "next month" in normalized:
         enforced["intent"] = "price_prediction"
+    elif any(term in normalized for term in price_terms) and any(phrase in normalized for phrase in ("predict", "next week", "next month", "increase", "decrease", "price range", "reach")):
+        enforced["intent"] = "price_prediction"
+    elif any(term in normalized for term in demand_terms) and any(phrase in normalized for phrase in ("predict", "next week", "next month", "increase", "decrease", "highest")):
+        enforced["intent"] = "demand_prediction"
     elif any(term in normalized for term in shortage_terms) and ("last month" in normalized or "previous month" in normalized):
         enforced["intent"] = "demand_and_supply"
     elif any(term in normalized for term in shortage_terms) and "next month" in normalized:
@@ -992,8 +1000,18 @@ def _enforce_question_semantics(
         enforced["intent"] = "demand_prediction"
     elif "highest demand" in normalized and "next month" in normalized:
         enforced["intent"] = "demand_prediction"
+    elif any(term in normalized for term in supply_terms) and any(phrase in normalized for phrase in ("expected", "next week", "next month", "increase", "decrease")):
+        enforced["intent"] = "shortage_prediction"
+    elif "most listings" in normalized or "highest listings" in normalized:
+        enforced["intent"] = "historical_supply"
+    elif "highest demand" in normalized and "location" in normalized:
+        enforced["intent"] = "marketplace_summary"
+    elif "noida" in normalized and "shortage" in normalized:
+        enforced["intent"] = "shortage_prediction"
     elif "recommend" in normalized and "best" in normalized and "credit" in normalized:
         enforced["intent"] = "buyer_recommendation"
+    elif "growth potential" in normalized:
+        enforced["intent"] = "seller_recommendation"
     elif "what price should i set" in normalized or "price should i set" in normalized:
         enforced["intent"] = "seller_recommendation"
     elif "recently listed" in normalized:
@@ -1183,6 +1201,12 @@ def _enforce_required_plan_components(
         for call in calls
     }
     output: List[Dict[str, Any]] = []
+    requested_sources = [
+        _source(item)
+        for item in list(enforced.get("requested_energy_sources", []) or [])
+        if _source(item)
+    ]
+    has_explicit_source_scope = len(requested_sources) == 1
 
     # General comparison intents must not inherit one accidental source filter.
     general_comparison_intents = {
@@ -1210,7 +1234,7 @@ def _enforce_required_plan_components(
                 "energy_source",
                 _source(source),
             )
-        elif intent in general_comparison_intents:
+        elif intent in general_comparison_intents and not has_explicit_source_scope:
             # Remove a single planner-selected source from general all-source
             # comparisons. Explicit multi-source scoping is handled after API
             # retrieval by analytics_service.
