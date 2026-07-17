@@ -710,6 +710,11 @@ def _render_marketplace_summary_html(
     current_inventory = analytics.get("current_unsold_inventory_from_period", {}) or {}
 
     period_label = _summary_period_label(period_from, period_to, is_today)
+    is_historical_summary = _is_historical_marketplace_summary(
+        period_from,
+        period_to,
+        is_today,
+    )
     if period_label in {"Current", "Marketplace"}:
         period_label = _period_caption_fixed(api_summary)
     listed_total = _number_or_none(
@@ -745,26 +750,42 @@ def _render_marketplace_summary_html(
         demand_leader=demand_leader,
     )
 
-    cards = [
-        (f"Currently available now from {period_label}", available_total, "kWh"),
-        (f"Active listings now from {period_label}", _int_or_zero(current_inventory.get("listing_count")), ""),
-        (f"Listed supply during {period_label}", listed_total, "kWh"),
-        (f"Completed demand during {period_label}", demand_total, "kWh"),
-    ]
+    if is_historical_summary:
+        cards = [
+            (f"Listed supply during {period_label}", listed_total, "kWh"),
+            (f"Completed demand during {period_label}", demand_total, "kWh"),
+            (f"Listings during {period_label}", listing_count, ""),
+            (f"Completed purchases during {period_label}", purchase_count, ""),
+        ]
+    else:
+        cards = [
+            ("Currently available now", available_total, "kWh"),
+            ("Active listings now", _int_or_zero(current_inventory.get("listing_count")), ""),
+            (f"Listed supply during {period_label}", listed_total, "kWh"),
+            (f"Completed demand during {period_label}", demand_total, "kWh"),
+        ]
     card_html = "".join(
         _metric_card(label, value, unit)
         for label, value, unit in cards
         if value is not None
     )
 
-    candidates = [
-        (f"Currently available now from {period_label}", "available", "kWh"),
-        (f"Listed supply during {period_label}", "listed", "kWh"),
-        (f"Completed demand during {period_label}", "demand", "kWh"),
-        (f"Market balance during {period_label}", "balance", "kWh"),
-        ("Average current asking price", "asking", ""),
-        ("Average realized price", "realized", ""),
-    ]
+    if is_historical_summary:
+        candidates = [
+            (f"Listed supply during {period_label}", "listed", "kWh"),
+            (f"Completed demand during {period_label}", "demand", "kWh"),
+            (f"Market balance during {period_label}", "balance", "kWh"),
+            ("Average realized price", "realized", ""),
+        ]
+    else:
+        candidates = [
+            ("Currently available now", "available", "kWh"),
+            (f"Listed supply during {period_label}", "listed", "kWh"),
+            (f"Completed demand during {period_label}", "demand", "kWh"),
+            (f"Market balance during {period_label}", "balance", "kWh"),
+            ("Average current asking price", "asking", ""),
+            ("Average realized price", "realized", ""),
+        ]
     rows = []
     for source in settings.SUPPORTED_ENERGY_SOURCES:
         stats = source_stats.get(source, {}) if isinstance(source_stats, Mapping) else {}
@@ -840,6 +861,20 @@ def _summary_period_label(period_from: str, period_to: str, is_today: bool) -> s
     return "Current"
 
 
+def _is_historical_marketplace_summary(
+    period_from: str,
+    period_to: str,
+    is_today: bool,
+) -> bool:
+    if is_today:
+        return False
+
+    if not period_from or not period_to:
+        return False
+
+    return True
+
+
 def _marketplace_interpretation(
     period_label: str,
     listed_total: Optional[float],
@@ -870,8 +905,7 @@ def _marketplace_interpretation(
         else:
             parts.append("Listed supply and completed demand were balanced overall.")
 
-    if available_total is not None and available_total > 0:
-        parts.append("Some inventory originating in the period remains available now.")
+    # Current inventory language only belongs in today summaries.
     return " ".join(parts)
 
 
