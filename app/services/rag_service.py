@@ -566,6 +566,8 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
         predicted = _number_or_none(item.get("predicted_forecast_period_kwh"))
         last_observed = _number_or_none(item.get("last_observed_period_kwh"))
         change_pct = _number_or_none(item.get("forecast_change_pct"))
+        periods_used = int(item.get("periods_used") or 0)
+        forecast_weeks = int(item.get("forecast_periods") or prediction.get("forecast_weeks") or 1)
         trend_text = "is expected to stay roughly flat"
         if change_pct is not None:
             if change_pct > 0:
@@ -578,7 +580,8 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
             f"Compared with the latest observed period ({_display_value(last_observed, 'kWh')}), demand {trend_text}."
         )
         detail = (
-            "Calculation: recursive weighted moving average over recent completed-demand periods. "
+            f"Calculation: recursive 4-point weighted moving average (weights 0.1, 0.2, 0.3, 0.4) over weekly completed-demand history. "
+            f"Model used {periods_used} historical period(s) and forecast {forecast_weeks} week(s). "
             "Trend signal compares forecast demand with the most recent observed period."
         )
         table = _responsive_table(
@@ -601,8 +604,11 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
         f"Demand was forecast during {forecast_label}, but no clear leading source was identified."
     )
     rows: List[List[str]] = []
+    max_periods_used = 0
+    forecast_weeks = int(prediction.get("forecast_weeks") or 1)
     for source_name in settings.SUPPORTED_ENERGY_SOURCES:
         item = predictions.get(source_name, {}) if isinstance(predictions.get(source_name), Mapping) else {}
+        max_periods_used = max(max_periods_used, int(item.get("periods_used") or 0))
         rows.append([
             source_name.title(),
             _display_value(item.get("predicted_forecast_period_kwh"), "kWh"),
@@ -610,7 +616,8 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
             _trend_display(item.get("forecast_change_pct")),
         ])
     detail = (
-        "Calculation: recursive weighted moving average over recent completed-demand periods by source. "
+        f"Calculation: recursive 4-point weighted moving average (weights 0.1, 0.2, 0.3, 0.4) over weekly completed-demand history by source. "
+        f"Model used up to {max_periods_used} historical period(s) and forecast {forecast_weeks} week(s). "
         "Trend signal compares each source forecast with its latest observed period."
     )
     return _render_standard_answer(
@@ -700,6 +707,65 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
             rows,
         ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
         api_summary,
+    )
+
+
+def _render_supply_forecast_from_shortage(api_summary: QueryApiSummary) -> str:
+    prediction = dict(api_summary.prediction_result or {})
+    source = (_filter_argument(api_summary, "energy_source") or "renewable").title()
+    location = _filter_argument(api_summary, "location") or "the requested location"
+    forecast_label = _forecast_caption(api_summary)
+    projections = prediction.get("projections_by_source") if isinstance(prediction, Mapping) else None
+
+    if isinstance(projections, Mapping) and projections:
+        rows: List[List[str]] = []
+        top_source = None
+        top_supply = None
+        for name, value in projections.items():
+            if not isinstance(value, Mapping):
+                continue
+            forecast_supply = _number_or_none(value.get("predicted_new_supply_kwh"))
+            if top_supply is None or ((forecast_supply or 0.0) > top_supply):
+                top_supply = forecast_supply or 0.0
+                top_source = str(name)
+            rows.append([
+                str(name).title(),
+                _display_value(value.get("predicted_new_supply_kwh"), "kWh"),
+                _display_value(value.get("current_active_supply_kwh"), "kWh"),
+                _trend_display(value.get("supply_trend_pct")),
+                _trend_display(value.get("demand_trend_pct")),
+            ])
+        finding = (
+            f"{top_source.title()} is projected to have the highest new supply during {forecast_label}, at about {_display_value(top_supply, 'kWh')}."
+            if top_source else
+            f"Supply forecast for {forecast_label} was generated from available listing and active-inventory data."
+        )
+        detail = (
+            "Calculation: forecast new supply is estimated using a recursive 4-point weighted moving average "
+            "(weights 0.1, 0.2, 0.3, 0.4) over recent listing-creation history, then interpreted alongside current active supply."
+        )
+        return _render_standard_answer(
+            "Upcoming supply forecast by renewable source",
+            finding,
+            _responsive_table(
+                ["Source", "Forecast new supply", "Current active supply", "Supply trend", "Demand trend"],
+                rows,
+            ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            api_summary,
+            forecast_label,
+        )
+
+    finding = f"{source} supply in {location} is expected to stay stable during {forecast_label} based on available listing and active-inventory history."
+    detail = (
+        "Calculation: forecast new supply is estimated using a recursive 4-point weighted moving average "
+        "(weights 0.1, 0.2, 0.3, 0.4) over recent listing-creation history, interpreted with current active supply."
+    )
+    return _render_standard_answer(
+        "Upcoming supply forecast",
+        finding,
+        f'<div style="{ui_constants.NOTE_STYLE}">{html.escape(detail)}</div>',
+        api_summary,
+        forecast_label,
     )
 
 
@@ -1654,6 +1720,12 @@ def answer_question(request: QueryRequest) -> QueryResponse:
 
     intent = str(plan.get("intent", "none"))
     question_text = request.question.lower()
+    supply_focus_question = (
+        any(term in question_text for term in ("supply", "availability", "listings", "listed"))
+        and "shortage" not in question_text
+        and "short in" not in question_text
+        and "shortfall" not in question_text
+    )
     if api_summary is not None and "shortage" in question_text and ("last month" in question_text or "previous month" in question_text):
         answer = _render_historical_shortage_or_insufficient(api_summary)
     elif api_summary is not None and "recently listed" in question_text:
@@ -1673,7 +1745,7 @@ def answer_question(request: QueryRequest) -> QueryResponse:
     elif intent == "demand_prediction" and api_summary is not None:
         answer = _render_demand_prediction_or_insufficient(api_summary)
     elif intent == "shortage_prediction" and api_summary is not None:
-        answer = _render_shortage_prediction_or_insufficient(api_summary)
+        answer = _render_supply_forecast_from_shortage(api_summary) if supply_focus_question else _render_shortage_prediction_or_insufficient(api_summary)
     elif intent == "price_prediction" and api_summary is not None:
         answer = _render_price_prediction_or_insufficient(api_summary)
     elif intent == "demand_supply_ratio" and api_summary is not None:
