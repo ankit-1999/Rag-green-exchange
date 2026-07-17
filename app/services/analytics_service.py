@@ -748,29 +748,130 @@ def _predict_price(purchases: Sequence[Mapping[str, Any]], aggregates: Mapping[s
 def _predict_shortage(listings, active_listings, purchases, plan) -> Tuple[Dict[str, Any], str, List[str]]:
     source = _plan_source(plan)
     location = _plan_location(plan)
-    if not source:
-        return {"energy_source": None, "location": location, "shortage_expected": None}, "insufficient_data", ["A specific energy source is required for shortage prediction."]
-    filtered_listings = _filter_records(listings, source, location)
-    filtered_active = _filter_records(active_listings, source, location)
-    filtered_purchases = _filter_records(purchases, source, location)
     periods = _forecast_periods(plan)
-    supply_values = [value for _, value in _weekly_energy_by_source(filtered_listings, "created_at")[source]]
-    demand_values = [value for _, value in _weekly_energy_by_source(filtered_purchases, "completed_at")[source]]
-    supply_forecast = _recursive_forecast(supply_values, periods, False)
-    demand_forecast = _recursive_forecast(demand_values, periods, False)
-    predicted_supply = supply_forecast.get("predicted_forecast_period_kwh")
-    predicted_demand = demand_forecast.get("predicted_forecast_period_kwh")
-    active_inventory = sum(float(record["energy_kwh"]) for record in filtered_active)
-    gap = predicted_supply + active_inventory - predicted_demand if predicted_supply is not None and predicted_demand is not None else None
-    confidence = _prediction_confidence(len(filtered_purchases), min(len(supply_values), len(demand_values)))
+    target_sources = [source] if source else list(SUPPORTED_SOURCES)
+    projections: Dict[str, Dict[str, Any]] = {}
+    total_purchase_records = 0
+    max_periods = 0
+
+    for target_source in target_sources:
+        projection = _shortage_projection_for_source(
+            listings,
+            active_listings,
+            purchases,
+            target_source,
+            location,
+            periods,
+        )
+        projections[target_source] = projection
+        total_purchase_records += int(projection.get("purchase_records", 0) or 0)
+        max_periods = max(max_periods, int(projection.get("history_periods", 0) or 0))
+
+    available = {
+        target_source: projection
+        for target_source, projection in projections.items()
+        if projection.get("has_any_data")
+    }
+    ranked = sorted(
+        available.items(),
+        key=lambda item: float(item[1].get("projected_gap_kwh") or 0.0),
+    )
+    shortage_sources = [
+        target_source
+        for target_source, projection in ranked
+        if bool(projection.get("shortage_expected"))
+    ]
+    top_source = ranked[0][0] if ranked else None
+    top_projection = ranked[0][1] if ranked else {}
+    confidence = _prediction_confidence(total_purchase_records, max_periods)
     limits = ["Projected shortage or surplus is an estimate, not a guarantee."]
+
     if confidence == "insufficient_data":
-        if predicted_supply is not None and predicted_demand is not None:
+        if ranked:
             confidence = "low"
             limits.insert(0, "Shortage forecast uses limited matching history and should be treated as directional.")
         else:
             limits.insert(0, "Insufficient matching location and source history for a reliable shortage forecast.")
-    return {"metric": "projected_market_balance_kwh", "energy_source": source, "location": location, "forecast_weeks": periods, "predicted_new_supply_kwh": _round(predicted_supply), "current_active_supply_kwh": _round(active_inventory), "predicted_demand_kwh": _round(predicted_demand), "projected_gap_kwh": _round(gap), "shortage_expected": gap < 0 if gap is not None else None, "model": "recursive_four_period_weighted_moving_average"}, confidence, limits
+
+    if source:
+        projection = projections.get(source, {})
+        return {
+            "metric": "projected_market_balance_kwh",
+            "energy_source": source,
+            "location": location,
+            "forecast_weeks": periods,
+            "predicted_new_supply_kwh": projection.get("predicted_new_supply_kwh"),
+            "current_active_supply_kwh": projection.get("current_active_supply_kwh"),
+            "predicted_demand_kwh": projection.get("predicted_demand_kwh"),
+            "projected_gap_kwh": projection.get("projected_gap_kwh"),
+            "shortage_expected": projection.get("shortage_expected"),
+            "supply_trend_pct": projection.get("supply_trend_pct"),
+            "demand_trend_pct": projection.get("demand_trend_pct"),
+            "model": "recursive_four_period_weighted_moving_average",
+            "calculation": "projected_gap = predicted_new_supply_kwh + current_active_supply_kwh - predicted_demand_kwh",
+        }, confidence, limits
+
+    return {
+        "metric": "projected_market_balance_kwh",
+        "location": location,
+        "forecast_weeks": periods,
+        "model": "recursive_four_period_weighted_moving_average",
+        "calculation": "projected_gap = predicted_new_supply_kwh + current_active_supply_kwh - predicted_demand_kwh",
+        "highest_shortage_risk_source": top_source,
+        "most_negative_projected_gap_kwh": top_projection.get("projected_gap_kwh"),
+        "shortage_sources": shortage_sources,
+        "projections_by_source": {
+            target_source: {
+                "predicted_new_supply_kwh": projection.get("predicted_new_supply_kwh"),
+                "current_active_supply_kwh": projection.get("current_active_supply_kwh"),
+                "predicted_demand_kwh": projection.get("predicted_demand_kwh"),
+                "projected_gap_kwh": projection.get("projected_gap_kwh"),
+                "shortage_expected": projection.get("shortage_expected"),
+                "supply_trend_pct": projection.get("supply_trend_pct"),
+                "demand_trend_pct": projection.get("demand_trend_pct"),
+            }
+            for target_source, projection in ranked
+        },
+    }, confidence, limits
+
+
+def _shortage_projection_for_source(listings, active_listings, purchases, source, location, periods) -> Dict[str, Any]:
+    filtered_listings = _filter_records(listings, source, location)
+    filtered_active = _filter_records(active_listings, source, location)
+    filtered_purchases = _filter_records(purchases, source, location)
+    supply_values = [value for _, value in _weekly_energy_by_source(filtered_listings, "created_at")[source]]
+    demand_values = [value for _, value in _weekly_energy_by_source(filtered_purchases, "completed_at")[source]]
+    supply_forecast = _recursive_forecast(supply_values, periods, False)
+    demand_forecast = _recursive_forecast(demand_values, periods, False)
+    predicted_supply = _number(supply_forecast.get("predicted_forecast_period_kwh"))
+    predicted_demand = _number(demand_forecast.get("predicted_forecast_period_kwh"))
+    active_inventory = sum(float(record["energy_kwh"]) for record in filtered_active)
+
+    if predicted_supply is None and (filtered_listings or filtered_active or filtered_purchases):
+        predicted_supply = 0.0
+    if predicted_demand is None and (filtered_listings or filtered_active or filtered_purchases):
+        predicted_demand = 0.0
+
+    supply_growth = _series_growth(supply_values)
+    demand_growth = _series_growth(demand_values)
+
+    gap = None
+    if predicted_supply is not None and predicted_demand is not None:
+        gap = predicted_supply + active_inventory - predicted_demand
+
+    history_periods = min(len(supply_values), len(demand_values)) if supply_values and demand_values else max(len(supply_values), len(demand_values))
+    return {
+        "predicted_new_supply_kwh": _round(predicted_supply),
+        "current_active_supply_kwh": _round(active_inventory),
+        "predicted_demand_kwh": _round(predicted_demand),
+        "projected_gap_kwh": _round(gap),
+        "shortage_expected": gap < 0 if gap is not None else None,
+        "supply_trend_pct": _round(supply_growth * 100, 2) if supply_growth is not None else None,
+        "demand_trend_pct": _round(demand_growth * 100, 2) if demand_growth is not None else None,
+        "purchase_records": len(filtered_purchases),
+        "history_periods": history_periods,
+        "has_any_data": bool(filtered_listings or filtered_active or filtered_purchases),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -976,6 +1077,13 @@ def _recent_growth_by_source(records, timestamp_field):
         if len(values) >= 2 and values[-2] != 0:
             result[source] = (values[-1] - values[-2]) / values[-2]
     return result
+
+
+def _series_growth(values: Sequence[float]) -> Optional[float]:
+    clean = [float(value) for value in values if value is not None]
+    if len(clean) < 2 or clean[-2] == 0:
+        return None
+    return (clean[-1] - clean[-2]) / clean[-2]
 
 
 def _prediction_confidence(record_count, period_count):

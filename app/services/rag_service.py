@@ -492,6 +492,22 @@ def _period_caption_fixed(api_summary: QueryApiSummary) -> str:
     return f"{start} to {end}"
 
 
+def _forecast_caption(api_summary: QueryApiSummary) -> str:
+    period = api_summary.forecast_period
+    start = str(getattr(period, "from_date", "") or "") if period else ""
+    end = str(getattr(period, "to_date", "") or "") if period else ""
+    if not start or not end:
+        return "the forecast period"
+    current_date = datetime.now(timezone.utc).date()
+    next_week_start = current_date + timedelta(days=(7 - current_date.weekday()))
+    next_week_end = next_week_start + timedelta(days=6)
+    if start[:10] == next_week_start.isoformat() and end[:10] == next_week_end.isoformat():
+        return "next week"
+    if start == end:
+        return start[:10]
+    return f"{start[:10]} to {end[:10]}"
+
+
 def _requested_sources(api_summary: QueryApiSummary) -> List[str]:
     result: List[str] = []
     for item in list(api_summary.filters_used or []):
@@ -540,15 +556,83 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
 
 
 def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
+    prediction = dict(api_summary.prediction_result or {})
     source = (_filter_argument(api_summary, "energy_source") or "renewable").title()
     location = _filter_argument(api_summary, "location") or "the requested location"
-    if not _prediction_has_result(api_summary, ("shortage_expected", "projected_gap_kwh")):
+    forecast_label = _forecast_caption(api_summary)
+    if not _prediction_has_result(api_summary, ("shortage_expected", "projected_gap_kwh", "projections_by_source", "highest_shortage_risk_source")):
         return _insufficient_answer(
             "Shortage prediction unavailable",
-            f"Due to insufficient predictive data regarding new supply and future demand for {source} credits in {location}, I cannot determine if there will be a shortage next month.",
+            f"Due to insufficient predictive data regarding new supply and future demand for {source} credits in {location}, I cannot determine if there will be a shortage during {forecast_label}.",
             api_summary,
         )
-    return _render_complete_api_fallback(api_summary)
+    projections = prediction.get("projections_by_source") if isinstance(prediction, Mapping) else None
+    if isinstance(projections, Mapping) and projections:
+        ranked = [
+            (str(key), value)
+            for key, value in projections.items()
+            if isinstance(value, Mapping)
+        ]
+        shortage_sources = [name for name, value in ranked if bool(value.get("shortage_expected"))]
+        top_source = str(prediction.get("highest_shortage_risk_source") or ranked[0][0]).title()
+        finding = (
+            f"{top_source} currently shows the highest shortage risk during {forecast_label}. A shortage is flagged when forecast demand exceeds forecast new supply plus current active supply."
+            if shortage_sources else
+            f"No renewable source currently shows a projected shortage during {forecast_label} based on the available marketplace data."
+        )
+        rows = []
+        for name, value in ranked:
+            rows.append([
+                name.title(),
+                _display_value(value.get("predicted_demand_kwh"), "kWh"),
+                _display_value(value.get("predicted_new_supply_kwh"), "kWh"),
+                _display_value(value.get("current_active_supply_kwh"), "kWh"),
+                _display_value(value.get("projected_gap_kwh"), "kWh"),
+                "Yes" if value.get("shortage_expected") else "No",
+                _display_value(value.get("demand_trend_pct"), "%"),
+                _display_value(value.get("supply_trend_pct"), "%"),
+            ])
+        detail = (
+            "Calculation: projected gap = forecast new supply + current active supply - forecast demand. "
+            "Trends considered: recent completed-demand trend, recent new-listing trend, and current active inventory."
+        )
+        return _render_standard_answer(
+            "Upcoming shortage risk by renewable source",
+            finding,
+            _responsive_table(
+                ["Source", "Forecast demand", "Forecast new supply", "Current active supply", "Projected gap", "Shortage risk", "Demand trend", "Supply trend"],
+                rows,
+            ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            api_summary,
+        )
+
+    detail = (
+        "Calculation: projected gap = forecast new supply + current active supply - forecast demand. "
+        "Trends considered: recent completed-demand trend, recent new-listing trend, and current active inventory."
+    )
+    finding = (
+        f"{source} credits are likely to face a shortage in {location} during {forecast_label}."
+        if prediction.get("shortage_expected") else
+        f"{source} credits are not currently projected to face a shortage in {location} during {forecast_label}."
+    )
+    rows = [[
+        source,
+        _display_value(prediction.get("predicted_demand_kwh"), "kWh"),
+        _display_value(prediction.get("predicted_new_supply_kwh"), "kWh"),
+        _display_value(prediction.get("current_active_supply_kwh"), "kWh"),
+        _display_value(prediction.get("projected_gap_kwh"), "kWh"),
+        _display_value(prediction.get("demand_trend_pct"), "%"),
+        _display_value(prediction.get("supply_trend_pct"), "%"),
+    ]]
+    return _render_standard_answer(
+        "Upcoming shortage prediction",
+        finding,
+        _responsive_table(
+            ["Source", "Forecast demand", "Forecast new supply", "Current active supply", "Projected gap", "Demand trend", "Supply trend"],
+            rows,
+        ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+        api_summary,
+    )
 
 
 def _render_price_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:

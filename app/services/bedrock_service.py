@@ -370,9 +370,18 @@ def _date_context(
     return {
         "today": current.isoformat(),
         "yesterday": (current - timedelta(days=1)).isoformat(),
+        "coming_days_end": (
+            current + timedelta(days=6)
+        ).isoformat(),
         "this_week_start": week_start.isoformat(),
         "this_week_end": (
             week_start + timedelta(days=6)
+        ).isoformat(),
+        "next_week_start": (
+            week_start + timedelta(days=7)
+        ).isoformat(),
+        "next_week_end": (
+            week_start + timedelta(days=13)
         ).isoformat(),
         "last_week_start": (
             week_start - timedelta(days=7)
@@ -942,14 +951,43 @@ def _enforce_question_semantics(
     elif "ghaziabad" in normalized:
         location = "Ghaziabad"
 
+    shortage_terms = (
+        "shortage",
+        "short in",
+        "shortfall",
+        "supply crunch",
+    )
+
     # Deterministic intent repair for prediction, recommendation, pricing,
     # ratio, historical-shortage, and recent-listing questions.
     if "demand to supply ratio" in normalized or "demand supply ratio" in normalized:
         enforced["intent"] = "demand_supply_ratio"
     elif "highest price" in normalized and "next month" in normalized:
         enforced["intent"] = "price_prediction"
-    elif "shortage" in normalized and "next month" in normalized:
+    elif any(term in normalized for term in shortage_terms) and ("last month" in normalized or "previous month" in normalized):
+        enforced["intent"] = "demand_and_supply"
+    elif any(term in normalized for term in shortage_terms) and "next month" in normalized:
         enforced["intent"] = "shortage_prediction"
+    elif any(term in normalized for term in shortage_terms):
+        enforced["intent"] = "shortage_prediction"
+        if "next week" in normalized:
+            enforced["forecast_period"] = {
+                "from": dates["next_week_start"],
+                "to": dates["next_week_end"],
+            }
+        elif any(
+            phrase in normalized
+            for phrase in (
+                "coming days",
+                "coming day",
+                "upcoming days",
+                "next few days",
+            )
+        ):
+            enforced["forecast_period"] = {
+                "from": dates["today"],
+                "to": dates["coming_days_end"],
+            }
     elif "predict" in normalized and "demand" in normalized:
         enforced["intent"] = "demand_prediction"
     elif "highest demand" in normalized and "next month" in normalized:
@@ -960,9 +998,6 @@ def _enforce_question_semantics(
         enforced["intent"] = "seller_recommendation"
     elif "recently listed" in normalized:
         enforced["intent"] = "historical_supply"
-    elif "shortage" in normalized and ("last month" in normalized or "previous month" in normalized):
-        enforced["intent"] = "demand_and_supply"
-
     intent = str(enforced.get("intent", "none"))
     if "demand and supply" in normalized or "supply and demand" in normalized:
         enforced["intent"] = "demand_and_supply"
@@ -1220,7 +1255,8 @@ def _enforce_required_plan_components(
         "to": history_to,
     }
 
-    if intent in PREDICTION_INTENTS:
+    forecast_period = _period(enforced.get("forecast_period"))
+    if intent in PREDICTION_INTENTS and not (forecast_period["from"] and forecast_period["to"]):
         enforced["forecast_period"] = {
             "from": dates["next_month_start"],
             "to": dates["next_month_end"],
