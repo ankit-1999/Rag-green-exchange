@@ -338,15 +338,27 @@ def _marketplace_summary(
         period_from,
         period_to,
     )
+    period_listing_records = _filter_records_by_created_period(
+        listing_records,
+        period_from,
+        period_to,
+    )
+    period_purchase_records = _filter_records_by_completed_period(
+        purchase_records,
+        period_from,
+        period_to,
+    )
 
     # Active endpoint aggregates represent all currently active inventory.
     # For period summaries, use filtered records only.
     current_supply = _current_supply(period_active_records, {})
     supply_mix = _supply_mix(period_active_records, {})
-    new_supply = _historical_supply(listing_records, listing_aggregates)
-    completed_demand = _historical_demand(purchase_records, purchase_aggregates)
-    realized_prices = _average_selling_price(purchase_records, purchase_aggregates)
-    balance = _market_balance(listing_records, purchase_records, listing_aggregates, purchase_aggregates)
+    # For marketplace summaries, use only period-scoped records so "today" and
+    # "last week" never inherit all-time totals.
+    new_supply = _historical_supply(period_listing_records, {})
+    completed_demand = _historical_demand(period_purchase_records, {})
+    realized_prices = _average_selling_price(period_purchase_records, {})
+    balance = _market_balance(period_listing_records, period_purchase_records, {}, {})
 
     source_statistics: Dict[str, Dict[str, Any]] = {}
     for source in SUPPORTED_SOURCES:
@@ -366,20 +378,13 @@ def _marketplace_summary(
             "market_balance_kwh_in_period": balance["market_balance_kwh_by_source"].get(source, 0.0),
         }
 
-    location_supply = _location_totals_from_aggregate(active_aggregates.get("location_breakdown", {}), "total_kwh")
-    location_demand = _location_totals_from_aggregate(purchase_aggregates.get("location_demand_breakdown", {}), "kwh_sold")
+    location_supply = _active_location_totals(period_active_records)
+    location_demand = _active_location_totals(period_purchase_records)
     top_supply_location, top_supply_value = _positive_max_item(location_supply)
     top_demand_location, top_demand_value = _positive_max_item(location_demand)
 
-    # Prefer full aggregate counts when record arrays are empty/partial.
-    listing_count_in_period = max(
-        len(listing_records),
-        _aggregate_listing_count(listing_aggregates),
-    )
-    completed_purchase_count_in_period = max(
-        len(purchase_records),
-        _aggregate_purchase_count(purchase_aggregates),
-    )
+    listing_count_in_period = len(period_listing_records)
+    completed_purchase_count_in_period = len(period_purchase_records)
 
     return {
         "current_unsold_inventory_from_period": current_supply,
@@ -424,6 +429,28 @@ def _filter_records_by_created_period(
     for record in records:
         created_at = record.get("created_at")
         if isinstance(created_at, datetime) and start <= created_at.date() <= end:
+            output.append(record)
+    return output
+
+
+def _filter_records_by_completed_period(
+    records: Sequence[Mapping[str, Any]],
+    period_from: Any,
+    period_to: Any,
+) -> List[Mapping[str, Any]]:
+    """Keep completed purchases that were completed in the requested period."""
+    if not period_from or not period_to:
+        return list(records)
+    try:
+        start = date.fromisoformat(str(period_from)[:10])
+        end = date.fromisoformat(str(period_to)[:10])
+    except ValueError:
+        return list(records)
+
+    output: List[Mapping[str, Any]] = []
+    for record in records:
+        completed_at = record.get("completed_at")
+        if isinstance(completed_at, datetime) and start <= completed_at.date() <= end:
             output.append(record)
     return output
 
