@@ -546,6 +546,14 @@ def _prediction_disclaimer() -> str:
     return "Prediction output is decision support only and should not be taken as financial, trading, or investment advice."
 
 
+def _prediction_disclaimer_html() -> str:
+    return (
+        f'<div style="{ui_constants.LIMITATION_STYLE};margin-top:10px;">'
+        + html.escape(_prediction_disclaimer())
+        + "</div>"
+    )
+
+
 def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> str:
     prediction = dict(api_summary.prediction_result or {})
     source = (_filter_argument(api_summary, "energy_source") or "").upper()
@@ -586,8 +594,7 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
         detail = (
             f"Calculation: recursive 4-point weighted moving average (weights 0.1, 0.2, 0.3, 0.4) over weekly completed-demand history. "
             f"Model used {periods_used} historical period(s) and forecast {forecast_weeks} week(s). "
-            "Trend signal compares forecast demand with the most recent observed period. "
-            + _prediction_disclaimer()
+            "Trend signal compares forecast demand with the most recent observed period."
         )
         table = _responsive_table(
             ["Scope", "Forecast demand", "Latest observed demand", "Expected change"],
@@ -596,7 +603,9 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
         return _render_standard_answer(
             "Demand prediction",
             finding,
-            table + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            table
+            + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+            + _prediction_disclaimer_html(),
             api_summary,
             forecast_label,
         )
@@ -623,14 +632,14 @@ def _render_demand_prediction_or_insufficient(api_summary: QueryApiSummary) -> s
     detail = (
         f"Calculation: recursive 4-point weighted moving average (weights 0.1, 0.2, 0.3, 0.4) over weekly completed-demand history by source. "
         f"Model used up to {max_periods_used} historical period(s) and forecast {forecast_weeks} week(s). "
-        "Trend signal compares each source forecast with its latest observed period. "
-        + _prediction_disclaimer()
+        "Trend signal compares each source forecast with its latest observed period."
     )
     return _render_standard_answer(
         "Demand prediction",
         finding,
         _responsive_table(["Source", "Forecast demand", "Latest observed demand", "Expected change"], rows)
-        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+        + _prediction_disclaimer_html(),
         api_summary,
         forecast_label,
     )
@@ -675,8 +684,7 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
             ])
         detail = (
             "Calculation: projected gap = forecast new supply + current active supply - forecast demand. "
-            "Trends considered: recent completed-demand trend, recent new-listing trend, and current active inventory. "
-            + _prediction_disclaimer()
+            "Trends considered: recent completed-demand trend, recent new-listing trend, and current active inventory."
         )
         return _render_standard_answer(
             "Upcoming shortage risk by renewable source",
@@ -684,14 +692,15 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
             _responsive_table(
                 ["Source", "Forecast demand", "Forecast new supply", "Current active supply", "Projected gap", "Shortage risk", "Demand trend", "Supply trend"],
                 rows,
-            ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            )
+            + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+            + _prediction_disclaimer_html(),
             api_summary,
         )
 
     detail = (
         "Calculation: projected gap = forecast new supply + current active supply - forecast demand. "
-        "Trends considered: recent completed-demand trend, recent new-listing trend, and current active inventory. "
-        + _prediction_disclaimer()
+        "Trends considered: recent completed-demand trend, recent new-listing trend, and current active inventory."
     )
     finding = (
         f"{source} credits are likely to face a shortage in {location} during {forecast_label}."
@@ -713,7 +722,9 @@ def _render_shortage_prediction_or_insufficient(api_summary: QueryApiSummary) ->
         _responsive_table(
             ["Source", "Forecast demand", "Forecast new supply", "Current active supply", "Projected gap", "Demand trend", "Supply trend"],
             rows,
-        ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+        )
+        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+        + _prediction_disclaimer_html(),
         api_summary,
     )
 
@@ -750,8 +761,7 @@ def _render_supply_forecast_from_shortage(api_summary: QueryApiSummary) -> str:
         )
         detail = (
             "Calculation: forecast new supply is estimated using a recursive 4-point weighted moving average "
-            "(weights 0.1, 0.2, 0.3, 0.4) over recent listing-creation history, then interpreted alongside current active supply. "
-            + _prediction_disclaimer()
+            "(weights 0.1, 0.2, 0.3, 0.4) over recent listing-creation history, then interpreted alongside current active supply."
         )
         return _render_standard_answer(
             "Upcoming supply forecast by renewable source",
@@ -759,7 +769,9 @@ def _render_supply_forecast_from_shortage(api_summary: QueryApiSummary) -> str:
             _responsive_table(
                 ["Source", "Forecast new supply", "Current active supply", "Supply trend", "Demand trend"],
                 rows,
-            ) + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            )
+            + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+            + _prediction_disclaimer_html(),
             api_summary,
             forecast_label,
         )
@@ -767,13 +779,13 @@ def _render_supply_forecast_from_shortage(api_summary: QueryApiSummary) -> str:
     finding = f"{source} supply in {location} is expected to stay stable during {forecast_label} based on available listing and active-inventory history."
     detail = (
         "Calculation: forecast new supply is estimated using a recursive 4-point weighted moving average "
-        "(weights 0.1, 0.2, 0.3, 0.4) over recent listing-creation history, interpreted with current active supply. "
-        + _prediction_disclaimer()
+        "(weights 0.1, 0.2, 0.3, 0.4) over recent listing-creation history, interpreted with current active supply."
     )
     return _render_standard_answer(
         "Upcoming supply forecast",
         finding,
-        f'<div style="{ui_constants.NOTE_STYLE}">{html.escape(detail)}</div>',
+        f'<div style="{ui_constants.NOTE_STYLE}">{html.escape(detail)}</div>'
+        + _prediction_disclaimer_html(),
         api_summary,
         forecast_label,
     )
@@ -806,8 +818,7 @@ def _render_price_prediction_or_insufficient(api_summary: QueryApiSummary) -> st
         )
         detail = (
             "Calculation: weighted moving-average forecast from realized completed-purchase prices. "
-            "Range is reported as lower and upper uncertainty bounds from the forecast error band. "
-            + _prediction_disclaimer()
+            "Range is reported as lower and upper uncertainty bounds from the forecast error band."
         )
         table = _responsive_table(
             ["Source", "Forecast price", "Price range", "Expected change"],
@@ -816,7 +827,9 @@ def _render_price_prediction_or_insufficient(api_summary: QueryApiSummary) -> st
         return _render_standard_answer(
             "Price prediction",
             finding,
-            table + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+            table
+            + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+            + _prediction_disclaimer_html(),
             api_summary,
             forecast_label,
         )
@@ -841,14 +854,14 @@ def _render_price_prediction_or_insufficient(api_summary: QueryApiSummary) -> st
         ])
     detail = (
         "Calculation: weighted moving-average forecast from realized completed-purchase prices by source. "
-        "Ranges are lower and upper uncertainty bounds from forecast error. "
-        + _prediction_disclaimer()
+        "Ranges are lower and upper uncertainty bounds from forecast error."
     )
     return _render_standard_answer(
         "Price prediction",
         finding,
         _responsive_table(["Source", "Forecast price", "Price range", "Expected change"], rows)
-        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>',
+        + f'<div style="{ui_constants.NOTE_STYLE};margin-top:10px;">{html.escape(detail)}</div>'
+        + _prediction_disclaimer_html(),
         api_summary,
         forecast_label,
     )
