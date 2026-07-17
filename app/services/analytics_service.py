@@ -371,16 +371,26 @@ def _marketplace_summary(
     top_supply_location, top_supply_value = _positive_max_item(location_supply)
     top_demand_location, top_demand_value = _positive_max_item(location_demand)
 
+    # Prefer full aggregate counts when record arrays are empty/partial.
+    listing_count_in_period = max(
+        len(listing_records),
+        _aggregate_listing_count(listing_aggregates),
+    )
+    completed_purchase_count_in_period = max(
+        len(purchase_records),
+        _aggregate_purchase_count(purchase_aggregates),
+    )
+
     return {
         "current_unsold_inventory_from_period": current_supply,
         "current_unsold_supply_mix_from_period": supply_mix,
         "period_listing_activity": {
-            "new_listing_count_in_period": len(listing_records),
+            "new_listing_count_in_period": listing_count_in_period,
             "newly_listed_supply_kwh_in_period": new_supply["total_listed_supply_kwh"],
             "newly_listed_supply_by_source_kwh_in_period": new_supply["listed_supply_kwh_by_source"],
         },
         "period_purchase_activity": {
-            "completed_purchase_count_in_period": len(purchase_records),
+            "completed_purchase_count_in_period": completed_purchase_count_in_period,
             "completed_demand_kwh_in_period": completed_demand["total_completed_demand_kwh"],
             "completed_demand_by_source_kwh_in_period": completed_demand["demand_kwh_by_source"],
             "weighted_average_realized_price_by_source_in_period": realized_prices["weighted_average_selling_price_by_source"],
@@ -451,6 +461,35 @@ def _location_totals_from_aggregate(value: Any, metric: str) -> Dict[str, float]
             if isinstance(stats, Mapping)
         )
     return totals
+
+
+def _aggregate_purchase_count(aggregates: Mapping[str, Any]) -> int:
+    """Count completed purchases from demand_by_source aggregate when records are sparse."""
+    demand = aggregates.get("demand_by_source", {}) if isinstance(aggregates, Mapping) else {}
+    if not isinstance(demand, Mapping):
+        return 0
+    total = 0
+    for source in SUPPORTED_SOURCES:
+        stats = demand.get(source, {})
+        if isinstance(stats, Mapping):
+            total += int(_number(stats.get("total_purchases")) or 0)
+    return total
+
+
+def _aggregate_listing_count(aggregates: Mapping[str, Any]) -> int:
+    """Count listings from supply_by_source aggregate when records are sparse."""
+    supply = aggregates.get("supply_by_source", {}) if isinstance(aggregates, Mapping) else {}
+    if not isinstance(supply, Mapping):
+        return 0
+    total = 0
+    for source in SUPPORTED_SOURCES:
+        statuses = supply.get(source, {})
+        if not isinstance(statuses, Mapping):
+            continue
+        for stats in statuses.values():
+            if isinstance(stats, Mapping):
+                total += int(_number(stats.get("total_listings")) or _number(stats.get("listings")) or 0)
+    return total
 
 
 def _active_totals(records: Sequence[Mapping[str, Any]], aggregates: Mapping[str, Any]) -> Dict[str, float]:
