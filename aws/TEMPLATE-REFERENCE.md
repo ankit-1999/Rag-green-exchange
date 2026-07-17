@@ -41,7 +41,7 @@ AWS Account (1)
 │   └── 2 log groups
 │
 └── Tags on all resources
-    └── ExpiresOn: 2026-07-06 (for cleanup)
+    └── ExpiresOn: <POCExpirationDate> (for cleanup)
 ```
 
 **Total Resources:** 20+
@@ -74,7 +74,7 @@ Parameters:
 ```yaml
   POCExpirationDate:
     Type: String
-    Default: '2026-07-06'
+    Default: '<set-when-deploying>'
     Description: Date when resources should be cleaned up
 ```
 
@@ -437,7 +437,7 @@ DocumentBucket:
 
 ```yaml
 OpenSearchDomain:
-  Type: AWS::OpenSearchServiceDomains::Domain
+  Type: AWS::OpenSearchService::Domain
   DependsOn: OpenSearchServiceLinkedRole
   Properties:
     DomainName: !Sub 'greengrid-docs-${Environment}'
@@ -800,13 +800,13 @@ Tags:
   - Key: Project
     Value: GreenGrid
   - Key: ExpiresOn
-    Value: 2026-07-06
+    Value: ${POCExpirationDate}
 ```
 
 **Why tags matter:**
 - Identify resources easily in AWS console
 - Enable cost allocation (see which resources cost what)
-- Automate cleanup (delete all with ExpiresOn=2026-07-06)
+- Automate cleanup (delete all with the current ExpiresOn tag value)
 - Track ownership and environment
 
 ---
