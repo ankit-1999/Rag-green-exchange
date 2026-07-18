@@ -1672,6 +1672,8 @@ def _render_standard_answer(
         note_parts.append(f"Data as of: {data_as_of}")
     note = " | ".join(note_parts)
 
+    calc_method = str(api_summary.calculation_method or "").strip()
+
     return (
         f'<section style="{ui_constants.SECTION_STYLE}">'
         f'<div style="{ui_constants.HERO_INFO_STYLE}">'
@@ -1681,6 +1683,11 @@ def _render_standard_answer(
         + (
             f'<div style="{ui_constants.NOTE_STYLE}">{html.escape(note)}</div>'
             if note
+            else ""
+        )
+        + (
+            f'<div style="{ui_constants.NOTE_STYLE}"><strong>Calculation method:</strong> {html.escape(calc_method)}</div>'
+            if calc_method
             else ""
         )
         + "</section>"

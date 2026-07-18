@@ -576,10 +576,11 @@ Create one ai-response section containing:
     Order rows exactly by demand_ranking_desc so the winner is first.
 3. When the question explicitly names sources, include only those requested
     sources, while preserving descending demand order.
-4. A Period and method section with exact supplied dates and method.
-5. Include an ai-note for limitations only when limitations contains one or
+4. An ai-note ai-neutral block showing the exact supplied dates and data_as_of only. Do not include calculation method here.
+5. An ai-note ai-neutral block titled Calculation method showing only the supplied calculation_method. Render this as a separate block from the date block.
+6. Include an ai-note for limitations only when limitations contains one or
     more actual limitations. If limitations is empty, render no limitations text.
-Do not copy these instructions into the answer.
+Do not merge the date and the calculation method into the same block. Do not copy these instructions into the answer.
 """.strip()
 
     if intent in ANALYTICS_INTENTS:
@@ -588,9 +589,10 @@ Create one ai-response section containing:
 1. An ai-hero ai-info block titled &#128200; Analysis with the main finding.
 2. An ai-section titled Key metrics containing a proper ai-table whenever
    multiple sources, locations, or periods are compared.
-3. An ai-section titled Period and method using exact supplied dates and method.
-4. An ai-note ai-neutral block only when supplied limitations exist.
-Do not copy these instructions or placeholders into the response.
+3. An ai-note ai-neutral block showing the data date (data_as_of) and period only. Do not include calculation method here.
+4. An ai-note ai-neutral block titled Calculation method showing only the supplied calculation_method. Render this as a separate block from the data date block.
+5. An ai-note ai-neutral block only when supplied limitations exist.
+Do not merge the data date and the calculation method into the same block. Do not copy these instructions or placeholders into the response.
 """.strip()
 
     return """
