@@ -1,7 +1,7 @@
-# GreenGrid Exchange - Architecture + HLD
+# Green Marketplace - Architecture + HLD
 
 ## 1. Purpose and Scope
-This document combines Architecture and High-Level Design for the GreenGrid Exchange RAG/Analytics service.
+This document combines Architecture and High-Level Design for the Green Marketplace RAG/Analytics service.
 
 It covers:
 - Runtime components in this repository
@@ -13,7 +13,7 @@ It covers:
 ---
 
 ## 2. System Context
-GreenGrid provides:
+Green Marketplace provides:
 - Document ingestion and indexing for retrieval-augmented responses
 - Query answering that combines deterministic marketplace analytics with LLM-generated or deterministic HTML output
 - Forecasting/recommendation responses for selected intents
@@ -275,3 +275,4 @@ sequenceDiagram
 - Add cached analytics snapshots for repeated period queries.
 - Add structured observability for intent/tool/latency per stage.
 - Add test suites for all deterministic renderers and period filtering rules.
+

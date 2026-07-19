@@ -442,7 +442,7 @@ def _planner_prompt(
     )
 
     return f"""
-You are the read-only marketplace API planner for GreenGrid Exchange.
+You are the read-only marketplace API planner for Green Marketplace.
 
 Your only responsibilities are:
 1. Identify the user's intent.
@@ -503,7 +503,7 @@ For those questions:
 
 Conceptual questions may use RAG without marketplace APIs, for example:
 - What is an electricity credit?
-- How does GreenGrid Exchange work?
+- How does Green Marketplace work?
 - What does demand-to-supply ratio mean?
 - How is price volatility calculated?
 - What are the supported renewable sources?
@@ -1683,3 +1683,4 @@ def _empty_plan(reason: str) -> Dict[str, Any]:
         "missing_parameters": [],
         "tool_calls": [],
     }
+

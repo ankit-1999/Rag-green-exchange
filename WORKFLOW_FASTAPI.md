@@ -1,4 +1,4 @@
-# GreenGrid FastAPI Workflow
+# Green Marketplace FastAPI Workflow
 
 This document covers only the FastAPI application workflow.
 
@@ -168,3 +168,4 @@ Document route:
 - ValueError -> HTTP 400
 - RuntimeError -> HTTP 502
 - Failed ingestion status -> HTTP 422
+

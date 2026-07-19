@@ -1,5 +1,5 @@
 """
-Application configuration for the GreenGrid Exchange RAG AI service.
+Application configuration for the Green Marketplace RAG AI service.
 
 All values are loaded from environment variables with validated defaults.
 Marketplace API paths reference public read-only endpoints only.
@@ -122,7 +122,7 @@ class Settings:
 
     APP_NAME = os.getenv(
         "APP_NAME",
-        "GreenGrid Exchange RAG AI",
+        "Green Marketplace RAG AI",
     )
     APP_VERSION = os.getenv(
         "APP_VERSION",
@@ -326,7 +326,7 @@ class Settings:
     )
 
     # -----------------------------------------------------------------------
-    # GreenGrid marketplace enums
+    # Green Marketplace marketplace enums
     # -----------------------------------------------------------------------
 
     SUPPORTED_ENERGY_SOURCES = (

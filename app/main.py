@@ -1,7 +1,7 @@
 """
 main.py
 -------
-FastAPI application entry point for GreenGrid Exchange RAG AI service.
+FastAPI application entry point for Green Marketplace RAG AI service.
 
 Includes:
   - CORS middleware
@@ -48,7 +48,7 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description=(
-        "RAG-powered AI assistant for GreenGrid Exchange. "
+        "RAG-powered AI assistant for Green Marketplace. "
         "Provides document ingestion, semantic retrieval, and AI-guided "
         "answers about electricity credits, source classification, and marketplace rules."
     ),
@@ -102,5 +102,6 @@ async def root():
 async def health():
     return {
         "status": "ok",
-        "service": "greengrid-rag-ai",
+        "service": "green-marketplace-rag-ai",
     }
+

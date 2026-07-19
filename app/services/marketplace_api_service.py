@@ -2,7 +2,7 @@
 marketplace_api_service.py
 --------------------------
 
-Read-only HTTP client for the GreenGrid marketplace backend.
+Read-only HTTP client for the Green Marketplace marketplace backend.
 
 Responsibilities:
 - Map approved LLM tool names to public GET endpoints.
@@ -476,7 +476,7 @@ def _validate_arguments(
 
 def _normalize_energy_source(value: Any) -> Optional[str]:
     """
-    Normalize an energy source to one of the configured GreenGrid values.
+    Normalize an energy source to one of the configured Green Marketplace values.
 
     Supported values:
     SOLAR, WIND, HYDRO, BIOMASS, GEOTHERMAL, TIDAL, OTHER.
@@ -1184,3 +1184,4 @@ def _safe_error_message(exc: Exception) -> str:
     """Return a bounded error message safe for logs and API summaries."""
     message = str(exc).strip() or type(exc).__name__
     return message[:500]
+

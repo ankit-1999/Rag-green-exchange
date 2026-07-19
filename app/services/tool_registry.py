@@ -2,7 +2,7 @@
 tool_registry.py
 ----------------
 
-Central read-only tool catalog for the GreenGrid Exchange AI service.
+Central read-only tool catalog for the Green Marketplace AI service.
 
 Used by:
 1. LLM planner prompt generation
@@ -655,3 +655,4 @@ def build_compact_planner_tools_text() -> str:
         ensure_ascii=True,
         separators=(",", ":"),
     )
+

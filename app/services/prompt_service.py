@@ -2,7 +2,7 @@
 prompt_service.py
 -----------------
 
-Builds the final grounded answer prompt for GreenGrid Exchange.
+Builds the final grounded answer prompt for Green Marketplace.
 
 The final LLM answer is returned as a polished HTML fragment so the frontend can
 render it directly inside the chat message. The response must never contain a
@@ -628,7 +628,7 @@ def build_rag_prompt(
 
     return f"""
 You are the grounded analytics, prediction, and recommendation assistant for
-GreenGrid Exchange.
+Green Marketplace.
 
 SUPPORTED ENERGY SOURCES:
 {_supported_sources_lines()}
@@ -715,3 +715,4 @@ be closed. Never place source information inside a table. Do not return
 Markdown, JSON, code fences, a full HTML document, a style block, or
 explanatory text outside the fragment.
 """.strip()
+

@@ -2,7 +2,7 @@
 rag_service.py
 --------------
 
-End-to-end orchestration for GreenGrid Exchange RAG, marketplace analytics,
+End-to-end orchestration for Green Marketplace RAG, marketplace analytics,
 prediction, and recommendation answers.
 
 Flow:
@@ -1704,7 +1704,7 @@ def _clear_embedded_source_metadata(
 
 
 def answer_question(request: QueryRequest) -> QueryResponse:
-    """Run the complete GreenGrid grounded-answer pipeline."""
+    """Run the complete Green Marketplace grounded-answer pipeline."""
     top_k = request.top_k or settings.OPENSEARCH_TOP_K
 
     # Plan and API execution do not depend on successful RAG retrieval.
@@ -1841,3 +1841,4 @@ def _append_unique(values: Sequence[str], new_value: str) -> List[str]:
 def _safe_error(exc: Exception) -> str:
     message = str(exc).strip() or type(exc).__name__
     return message[:500]
+

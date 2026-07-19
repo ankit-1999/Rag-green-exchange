@@ -247,8 +247,8 @@ def clear_index_data() -> int:
         response = client.delete_by_query(
             index=settings.OPENSEARCH_INDEX_NAME,
             body={"query": {"match_all": {}}},
-            conflicts="proceed",
-            refresh=True,
+            conflicts="proceed", # type: ignore
+            refresh=True, # type: ignore
         )
         deleted = int(response.get("deleted", 0))
         logger.info("clear_index_data: deleted %d chunks", deleted)

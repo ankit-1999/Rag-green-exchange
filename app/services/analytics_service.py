@@ -2,7 +2,7 @@
 analytics_service.py
 --------------------
 
-Deterministic analytics, forecasting, and recommendation engine for GreenGrid
+Deterministic analytics, forecasting, and recommendation engine for Green Marketplace
 Exchange.
 
 This module does not call APIs, OpenSearch, or Amazon Bedrock. It receives the
@@ -623,7 +623,7 @@ def _demand_and_supply(
 ) -> Dict[str, Any]:
     """Calculate remaining supply, sold supply/demand, and total issued supply.
 
-    GreenGrid API semantics:
+    Green Marketplace API semantics:
     - get_all_listings contains credits that remain unsold for the scope.
     - get_all_purchases contains sold credits.
     - total supply therefore equals remaining listing kWh plus sold kWh.
@@ -1271,3 +1271,4 @@ def _json_safe(value):
     if isinstance(value, Mapping): return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set)): return [_json_safe(item) for item in value]
     return str(value)
+

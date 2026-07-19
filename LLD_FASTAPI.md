@@ -1,4 +1,4 @@
-# GreenGrid FastAPI LLD
+# Green Marketplace FastAPI LLD
 
 This Low-Level Design describes only the FastAPI application modules and runtime interactions.
 
