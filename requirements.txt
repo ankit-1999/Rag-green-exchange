@@ -1,4 +1,4 @@
-# GreenGrid Exchange RAG, Analytics and Prediction AI - Python dependencies
+# Green Marketplace RAG, Analytics and Prediction AI - Python dependencies
 
 # Web framework
 fastapi>=0.111.0

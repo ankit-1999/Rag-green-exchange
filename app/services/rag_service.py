@@ -317,6 +317,74 @@ def _retrieve_chunks(question: str, top_k: int) -> List[Dict[str, Any]]:
         return []
 
 
+def _is_document_architecture_question(question: str) -> bool:
+    """
+    Detect documentation-centric architecture questions.
+
+    These questions should prefer document-only RAG retrieval and avoid
+    marketplace live-data planning, which can misclassify terms like "supply"
+    or "purchase" when they appear in design documents.
+    """
+    normalized = " ".join((question or "").lower().split())
+    if not normalized:
+        return False
+
+    architecture_terms = (
+        "architecture",
+        "lld",
+        "hld",
+        "low level design",
+        "high level design",
+        "workflow",
+        "complete workflow",
+        "internal working",
+        "internal workings",
+        "how it works",
+        "module",
+        "smart contract",
+        "functional requirement",
+        "non-functional requirement",
+        "nfr",
+        "fr-",
+        "stakeholder",
+        "glossary",
+        "constraint",
+        "assumption",
+        "deployment",
+        "token management",
+        "listing integrity",
+        "purchase integrity",
+        "statistics",
+        "reporting",
+        "security requirement",
+        "performance requirement",
+        "reliability requirement",
+        "maintainability requirement",
+        "compliance requirement",
+        "erc-20",
+        "hardhat",
+        "sepolia",
+    )
+
+    doc_cues = (
+        "this document",
+        "the document",
+        "ard",
+        "lld",
+        "hld",
+        "requirements doc",
+        "requirements document",
+        "from the doc",
+        "in the spec",
+        "in the architecture",
+    )
+
+    has_architecture_term = any(term in normalized for term in architecture_terms)
+    has_doc_cue = any(term in normalized for term in doc_cues)
+
+    return has_architecture_term or has_doc_cue
+
+
 def _build_sources(hits: Sequence[Mapping[str, Any]]) -> List[QuerySource]:
     sources: List[QuerySource] = []
 
@@ -1706,6 +1774,52 @@ def _clear_embedded_source_metadata(
 def answer_question(request: QueryRequest) -> QueryResponse:
     """Run the complete Green Marketplace grounded-answer pipeline."""
     top_k = request.top_k or settings.OPENSEARCH_TOP_K
+
+    if _is_document_architecture_question(request.question):
+        hits = _retrieve_chunks(request.question, top_k)
+        sources = _build_sources(hits)
+
+        if not hits:
+            return QueryResponse(
+                answer=(
+                    "I could not find relevant architecture or internal-working "
+                    "content in the indexed documents. Please upload the "
+                    "document and try again."
+                ),
+                source_count=0,
+                sources=[],
+                answer_mode="insufficient_data",
+                api_facts_used=False,
+                api_summary=None,
+            )
+
+        prompt = prompt_service.build_rag_prompt(
+            question=request.question,
+            retrieved_chunks=hits,
+            api_context=None,
+        )
+
+        try:
+            answer = bedrock_service.generate_answer(prompt)
+            if not answer.strip():
+                raise RuntimeError("Bedrock returned an empty answer.")
+            if not _is_complete_html_fragment(answer):
+                raise RuntimeError("Bedrock returned incomplete HTML.")
+        except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "Architecture-doc answer generation unavailable: %s",
+                exc,
+            )
+            answer = _build_fallback_answer(None, hits, exc)
+
+        return QueryResponse(
+            answer=answer,
+            source_count=len(sources),
+            sources=sources,
+            answer_mode="retrieval_only",
+            api_facts_used=False,
+            api_summary=None,
+        )
 
     # Plan and API execution do not depend on successful RAG retrieval.
     api_summary, api_facts_used, plan = _resolve_api_summary(request.question)

@@ -198,7 +198,7 @@ class Settings:
     )
     OPENSEARCH_TOP_K = _int(
         "OPENSEARCH_TOP_K",
-        5,
+        8,
         1,
         20,
     )
@@ -218,7 +218,7 @@ class Settings:
     )
     CHUNK_OVERLAP_TOKENS = _int(
         "CHUNK_OVERLAP_TOKENS",
-        50,
+        100,
         0,
         500,
     )
