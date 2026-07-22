@@ -523,19 +523,18 @@ historical_supply:
 - Must use get_all_listings.
 
 historical_demand:
-- Must use get_all_purchases with status=COMPLETED.
+- Must use get_all_purchases.
 
 demand_and_supply:
 - Use when the question asks for demand and supply together for a source, location, or period.
 - Must use get_all_listings and get_all_purchases with identical source, location, and period filters.
-- Purchases must use status=COMPLETED.
 - Remaining supply comes from get_all_listings.
 - Sold supply and realized demand come from get_all_purchases.
 - Total supply equals remaining listing kWh plus completed purchase kWh.
 - Never use get_all_purchases alone for a demand-and-supply question.
 
 average_selling_price:
-- Must use get_all_purchases with status=COMPLETED.
+- Must use get_all_purchases.
 
 supply_by_location:
 - Must use get_active_listings.
@@ -549,7 +548,7 @@ marketplace_summary:
 - get_active_listings represents credits still available for sale now.
 - For historical periods, analytics must retain only active listings whose created_at falls inside the requested period to measure remaining availability from that period.
 - Must use get_all_listings with requested created_from and created_to for period listing supply.
-- Must use get_all_purchases with status=COMPLETED and requested completed_from and completed_to for period realized demand.
+- Must use get_all_purchases with requested completed_from and completed_to for period realized demand.
 - Do not apply an energy_source filter; summarize all supported sources.
 - Group by energy_source and location.
 - Include current unsold inventory from period, period listing supply, period completed demand, realized prices, market balance, and location highlights.
@@ -557,43 +556,38 @@ marketplace_summary:
 demand_supply_ratio:
 - Must use get_all_listings and get_all_purchases.
 - Both tools must use the same source, location, and historical period.
-- Purchases must use status=COMPLETED.
 
 market_balance:
 - Must use get_all_listings and get_all_purchases.
 - Both tools must use the same source, location, and historical period.
-- Purchases must use status=COMPLETED.
 
 supply_stability:
 - Must use get_all_listings.
 - Prefer 90 to 180 days of history.
 
 price_volatility:
-- Must use get_all_purchases with status=COMPLETED.
+- Must use get_all_purchases.
 - Prefer 90 to 180 days of history.
 
 demand_prediction:
 - Must use get_all_listings and get_all_purchases.
-- Purchases must use status=COMPLETED.
 - If the user does not specify a history period, use all available completed/listed data (no historical date filters).
 - For a general highest-demand question, do not apply a source filter; compare
   SOLAR, WIND, HYDRO, BIOMASS, GEOTHERMAL, TIDAL, and OTHER.
 
 price_prediction:
 - Must use get_all_purchases and get_active_listings.
-- Purchases must use status=COMPLETED and group_by_month=true.
+- Purchases must use group_by_month=true.
 - If the user does not specify a history period, use all available purchase history (no completed date filters).
 - For a general source prediction, do not apply one source filter.
 
 shortage_prediction:
 - Must use get_all_listings, get_all_purchases, and get_active_listings.
 - Apply the same source and location to all three tools when supplied.
-- Purchases must use status=COMPLETED.
 - If the user does not specify a history period, use all available matching history (no historical date filters).
 
 seller_recommendation:
 - Must use get_all_listings, get_all_purchases, and get_active_listings.
-- Purchases must use status=COMPLETED.
 - If the user does not specify a history period, use all available marketplace history (no historical date filters).
 - If the user names multiple sources, compare only those sources in analytics but
   do not incorrectly apply one source filter to all API calls.
@@ -619,7 +613,6 @@ DATE RULES:
 FILTER RULES:
 - Use created_from and created_to only with get_all_listings.
 - Use completed_from and completed_to only with get_all_purchases.
-- Use status=COMPLETED for realized demand and realized price.
 - Use group_by_month=true only when monthly purchase price trends are required.
 - Use skip=0 and limit=200.
 - Add location only when the user specifies a location.
@@ -648,14 +641,14 @@ Question: What percentage of active marketplace supply comes from each source?
 Result: supply_mix, get_active_listings, compare all supported sources.
 
 Question: Compare demand for Biomass, Geothermal, and Tidal last month.
-Result: historical_demand, get_all_purchases, status COMPLETED, last-month dates.
+Result: historical_demand, get_all_purchases, last-month dates.
 Do not apply one energy_source filter because multiple sources are compared.
 
 Question: What was the demand and supply for Solar credits during this period?
-Result: demand_and_supply, get_all_listings plus get_all_purchases, identical SOLAR and date filters, purchases status COMPLETED. Total supply is remaining listing kWh plus sold purchase kWh.
+Result: demand_and_supply, get_all_listings plus get_all_purchases, identical SOLAR and date filters. Total supply is remaining listing kWh plus sold purchase kWh.
 
 Question: Which source had the highest average selling price last month?
-Result: average_selling_price, get_all_purchases, status COMPLETED, no source filter.
+Result: average_selling_price, get_all_purchases, no source filter.
 
 Question: Predict which renewable source will have highest demand next month.
 Result: demand_prediction, all listings plus purchases, 180-day history, next-month
@@ -895,7 +888,6 @@ def _enforce_question_period(
             arguments["created_from"] = period_from
             arguments["created_to"] = period_to
         elif tool == "get_all_purchases":
-            arguments["status"] = "COMPLETED"
             arguments["completed_from"] = period_from
             arguments["completed_to"] = period_to
 
@@ -1053,7 +1045,6 @@ def _enforce_question_semantics(
             arguments["created_from"] = _start_of_day(str(period_from))
             arguments["created_to"] = _end_of_day(str(period_to))
         elif tool == "get_all_purchases":
-            arguments["status"] = "COMPLETED"
             if period_from and period_to:
                 arguments["completed_from"] = _start_of_day(str(period_from))
                 arguments["completed_to"] = _end_of_day(str(period_to))
@@ -1248,7 +1239,6 @@ def _enforce_required_plan_components(
             args["created_to"] = history_to
 
         elif tool == "get_all_purchases":
-            args["status"] = "COMPLETED"
             args["completed_from"] = history_from
             args["completed_to"] = history_to
             args["group_by_month"] = (
@@ -1431,6 +1421,10 @@ def _normalize_args(
                 out[key] = location[:200]
 
         elif key == "status":
+            # Purchase endpoint already returns purchased records;
+            # never forward status for get_all_purchases.
+            if tool == "get_all_purchases":
+                continue
             status = str(item).strip().upper()
             valid = (
                 PURCHASE_STATUSES
@@ -1517,7 +1511,6 @@ def _normalize_args(
     )
 
     if tool == "get_all_purchases":
-        out.setdefault("status", "COMPLETED")
         out.setdefault("group_by_month", False)
 
     if tool == "get_active_listings":

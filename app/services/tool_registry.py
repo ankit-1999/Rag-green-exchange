@@ -423,10 +423,6 @@ _TOOL_CATALOG: List[Dict[str, Any]] = [
             "location": (
                 "optional string; case-insensitive partial seller-location match"
             ),
-            "status": (
-                "optional string; use COMPLETED for realized demand and "
-                "realized selling-price analytics"
-            ),
             "completed_from": (
                 "optional ISO-8601 date or datetime; inclusive completion "
                 "lower boundary"
@@ -450,7 +446,6 @@ _TOOL_CATALOG: List[Dict[str, Any]] = [
                 "filters_applied": {
                     "energy_source": "string|null",
                     "location": "string|null",
-                    "status": "string|null",
                     "completed_from": "ISO-8601 datetime|null",
                     "completed_to": "ISO-8601 datetime|null",
                 },

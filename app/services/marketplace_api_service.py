@@ -89,7 +89,6 @@ _TOOL_ALLOWED_FILTERS: Dict[str, set[str]] = {
     "get_all_purchases": {
         "energy_source",
         "location",
-        "status",
         "completed_from",
         "completed_to",
         "group_by_month",
@@ -464,7 +463,6 @@ def _validate_arguments(
     )
 
     if tool_name == "get_all_purchases":
-        cleaned.setdefault("status", "COMPLETED")
         cleaned.setdefault("group_by_month", False)
 
     if tool_name == "get_active_listings":
